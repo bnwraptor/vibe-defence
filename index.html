@@ -239,7 +239,7 @@
     // === CONSTANTS ===
     const COLS = 12;
     const ROWS = 16;
-    const CELL_TYPES = { EMPTY: 0, BLOCKED: 1, SPAWN: 2, BASE: 3, TOWER: 4 };
+    const CELL_TYPES = { EMPTY: 0, BLOCKED: 1, SPAWN: 2, BASE: 3, TOWER: 4, PATH: 5 };
     const SPAWN_POS = { col: 0, row: 7 };
     const BASE_POS = { col: 11, row: 7 };
     const PATH_BUDGET = 20;
@@ -393,6 +393,8 @@
     }
 
     function validatePath() {
+      // No path drawn = enemies go straight from SPAWN to BASE (still valid)
+      if (pathTiles.length === 0) return true;
       const visited = new Set();
       const queue = [{ col: SPAWN_POS.col, row: SPAWN_POS.row }];
       visited.add(`${SPAWN_POS.col},${SPAWN_POS.row}`);
@@ -611,7 +613,7 @@
 
         if (dist < 0.1) {
           enemy.pathIndex++;
-          if (enemy.col === BASE_POS.col && enemy.row === BASE_POS.row) {
+          if (Math.hypot(enemy.col - BASE_POS.col, enemy.row - BASE_POS.row) < 0.2) {
             const damage = Math.ceil(enemy.maxHP * 0.1);
             baseHP -= damage;
             screenShake.duration = 0.2;
@@ -686,6 +688,7 @@
     }
 
     function startWave() {
+      pathBudget = PATH_BUDGET;
       if (!validatePath()) {
         pathInvalidFlash = 0.5;
         showTooltip('Path not connected!');
@@ -716,6 +719,7 @@
           gameState = GameStates.PLANNING;
           setStartButton(true);
           updateHUD();
+          playWaveCompleteSound();
         }
       }
     }
@@ -946,8 +950,27 @@
           <p class="how-text">Draw a path from SPAWN (green) to BASE (red) by tapping or swiping on empty cells.</p>
           <p class="how-text">Your towers automatically attack enemies that come within range.</p>
           <p class="how-text">Enemies that reach the base deal damage. Don't let your HP reach zero!</p>
-          <p class="how-text">Tap a tower to see its stats. Survive all 10 waves to win.</p>
-          <button class="big-btn" id="overlay-back-btn">BACK</button>
+          <p class="how-text">Survive all 10 waves to win.</p>
+          <h2 style="color:#fff;font-size:16px;margin:16px 0 8px">Tower Stats</h2>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;max-width:340px;color:#ccc;font-size:12px;text-align:left">
+            <div style="background:#1a1a2e;padding:8px;border-radius:6px">
+              <span style="color:#00ffff;font-weight:bold">TURRET</span><br>
+              Range: 3 &nbsp; DMG: 10 &nbsp; Rate: 0.5s
+            </div>
+            <div style="background:#1a1a2e;padding:8px;border-radius:6px">
+              <span style="color:#ff8800;font-weight:bold">CANNON</span><br>
+              Range: 2 &nbsp; DMG: 40 &nbsp; Rate: 2s
+            </div>
+            <div style="background:#1a1a2e;padding:8px;border-radius:6px">
+              <span style="color:#ff4444;font-weight:bold">SNIPER</span><br>
+              Range: 6 &nbsp; DMG: 80 &nbsp; Rate: 3s
+            </div>
+            <div style="background:#1a1a2e;padding:8px;border-radius:6px">
+              <span style="color:#4488ff;font-weight:bold">FROST</span><br>
+              Range: 2.5 &nbsp; DMG: 5 &nbsp; Rate: 1s &nbsp; <span style="color:#88aaff">Slows 50%</span>
+            </div>
+          </div>
+          <button class="big-btn" id="overlay-back-btn" style="margin-top:20px">BACK</button>
         `;
         document.getElementById('overlay-back-btn').addEventListener('click', () => showOverlay('MENU'));
       } else if (type === 'GAME_OVER') {
@@ -983,7 +1006,7 @@
     function startGame() {
       hideOverlay();
       gameState = GameStates.PLANNING;
-      setStartButton(true);
+      setStartButton(validatePath());
     }
 
     function restartGame() {
@@ -1000,7 +1023,7 @@
       hideOverlay();
       updateHUD();
       gameState = GameStates.PLANNING;
-      setStartButton(true);
+      setStartButton(false);
     }
 
     function resumeGame() {
