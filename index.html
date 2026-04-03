@@ -1350,12 +1350,11 @@
     }
 
     function clearPath() {
-      // Remove all path tiles and refund budget
+      // Remove all path tiles from grid but KEEP accumulated budget
       for (const tile of pathTiles) {
         grid[tile.row][tile.col] = CELL_TYPES.EMPTY;
       }
       pathTiles = [];
-      tileBudget = STARTING_TILE_BUDGET;
       updateHUD();
       if (gameState === GameStates.PLANNING) setStartButton(false);
       playRemoveSound();
