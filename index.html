@@ -41,7 +41,7 @@
     }
     #hud-top .hp-display { color: #ff4444; }
     #hud-top .wave-display { color: #aaa; }
-    #hud-top .currency-display { color: #ffd700; }
+    #hud-top .currency-display { color: #ffd700; margin-right: 6px; }
     #canvas-wrapper {
       flex: 1;
       display: flex;
@@ -139,16 +139,17 @@
     }
     #power-flash.visible { opacity: 1; }
     #pause-btn {
-      position: fixed;
-      top: 12px; right: 12px;
       background: rgba(255,255,255,0.1);
       border: none;
       color: #fff;
-      font-size: 20px;
-      width: 40px; height: 40px;
+      font-size: 16px;
+      width: 32px; height: 32px;
       border-radius: 50%;
       cursor: pointer;
-      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
     }
     #overlay {
       position: fixed;
@@ -239,6 +240,7 @@
       <span class="wave-display" id="wave-text">WAVE 1/10</span>
       <span class="hp-display" id="hp-text">HP: ██████░░░░</span>
       <span class="currency-display" id="currency-text">💰 100</span>
+      <button id="pause-btn">⏸</button>
     </div>
     <div id="canvas-wrapper">
       <canvas id="game"></canvas>
@@ -272,7 +274,6 @@
         </div>
       </div>
     </div>
-  <button id="pause-btn">⏸</button>
   <div id="overlay">
     <h1>Vibe Defence</h1>
     <h2>Path Architect</h2>
