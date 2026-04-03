@@ -262,8 +262,9 @@
     const CELL_TYPES = { EMPTY: 0, BLOCKED: 1, SPAWN: 2, BASE: 3, TOWER: 4, PATH: 5 };
     const SPAWN_POS = { col: 0, row: 7 };
     const BASE_POS = { col: 11, row: 7 };
-    const STARTING_TILE_BUDGET = 8;  // wave 1 total tiles
-    const TILE_ACCUM_WAVES = 8;     // add 8 tiles each wave 1-10
+    const STARTING_TILE_BUDGET = 20;  // wave 1 total tiles
+    const TILE_ACCUM_WAVES = 7;     // add 7 tiles each wave 1-8 (→76)
+    const TILE_WAVE9_BONUS = 4;      // special: +4 at wave 9 (→80)
     const TILE_ACCUM_ENDLESS = 2;    // add 2 tiles every 10 waves in endless
     const MAX_TILE_BUDGET = 110;
     const BASE_HP = 100;
@@ -1179,17 +1180,23 @@
 
     function resetPathBudget() {
       // Tile budget progression (after each wave completes):
-      // Waves 1-9:  +8 each → 8, 16, 24...80 (wave 9 complete)
-      // Wave 10:    no change → stays 80
-      // Waves 11+:  +2 each → 82, 84... capped at 110
+      // Wave 1 (start): 20 | Wave 1 complete: +7 → 27
+      // Wave 2 complete: +7 → 34 | Wave 3: 41 | Wave 4: 48
+      // Wave 5: 55 | Wave 6: 62 | Wave 7: 69 | Wave 8: 76
+      // Wave 9 complete: +4 → 80 | Wave 10: cap 80
+      // Waves 11+: +2 each → capped at 110
       if (tileBudget >= MAX_TILE_BUDGET) { updateHUD(); return; }
-      if (currentWave < BASE_WAVES) {
-        tileBudget = Math.min(tileBudget + TILE_ACCUM_WAVES, MAX_TILE_BUDGET);
-      } else if (currentWave === BASE_WAVES) {
-        // Wave 10: no accumulation (max base tiles reached)
-      } else {
+      if (currentWave === BASE_WAVES) {
+        // Wave 10: no accumulation
+      } else if (currentWave > BASE_WAVES) {
         const target = 80 + (currentWave - BASE_WAVES) * TILE_ACCUM_ENDLESS;
         tileBudget = Math.min(target, MAX_TILE_BUDGET);
+      } else if (currentWave === BASE_WAVES - 1) {
+        // Wave 9 complete: +4 → reaches 80
+        tileBudget = Math.min(tileBudget + TILE_WAVE9_BONUS, MAX_TILE_BUDGET);
+      } else {
+        // Waves 1-8: +7 per completed wave
+        tileBudget = Math.min(tileBudget + TILE_ACCUM_WAVES, MAX_TILE_BUDGET);
       }
       updateHUD();
     }
