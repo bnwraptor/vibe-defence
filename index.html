@@ -262,7 +262,10 @@
     const CELL_TYPES = { EMPTY: 0, BLOCKED: 1, SPAWN: 2, BASE: 3, TOWER: 4, PATH: 5 };
     const SPAWN_POS = { col: 0, row: 7 };
     const BASE_POS = { col: 11, row: 7 };
-    const PATH_BUDGET = 20;
+    const STARTING_TILE_BUDGET = 8;  // wave 1 total tiles
+    const TILE_ACCUM_WAVES = 8;     // add 8 tiles each wave 1-10
+    const TILE_ACCUM_ENDLESS = 2;    // add 2 tiles every 10 waves in endless
+    const MAX_TILE_BUDGET = 110;
     const BASE_HP = 100;
     const STARTING_CURRENCY = 100;
     const WAVE_BONUS = 20;
@@ -313,7 +316,7 @@
     let enemies = [];
     let projectiles = [];
     let pathTiles = [];
-    let pathBudget = PATH_BUDGET;
+    let tileBudget = STARTING_TILE_BUDGET;  // total tiles available (accumulates)
     let currency = STARTING_CURRENCY;
     let baseHP = BASE_HP;
     let currentWave = 1;
@@ -388,7 +391,7 @@
 
     // === PATH ===
     function placePathTile(col, row) {
-      if (pathBudget <= 0) {
+      if (tileBudget <= 0) {
         showTooltip('No path budget!');
         return false;
       }
@@ -400,7 +403,7 @@
         return false;
       }
       pathTiles.push({ col, row });
-      pathBudget--;
+      tileBudget--;
       grid[row][col] = CELL_TYPES.PATH;
       playPlaceSound();
       flashTile(col, row, '#4a4a6a', 100);
@@ -413,7 +416,7 @@
       const idx = pathTiles.findIndex(t => t.col === col && t.row === row);
       if (idx === -1) return false;
       pathTiles.splice(idx, 1);
-      pathBudget++;
+      tileBudget++;
       grid[row][col] = CELL_TYPES.EMPTY;
       playRemoveSound();
       updateHUD();
@@ -1039,11 +1042,11 @@
       }
 
       const used = pathTiles.length;
-      const budgetStr = `${pathBudget}`;
+      const budgetStr = `${tileBudget}`;
       if (budgetStr !== lastBudgetText) {
         budgetText.textContent = budgetStr;
         lastBudgetText = budgetStr;
-        budgetFill.style.width = `${(used / Math.max(pathBudget, 1)) * 100}%`;
+        budgetFill.style.width = `${(pathTiles.length / Math.max(tileBudget, 1)) * 100}%`;
       }
     }
 
@@ -1168,15 +1171,26 @@
         grid[tile.row][tile.col] = CELL_TYPES.EMPTY;
       }
       pathTiles = [];
-      pathBudget = PATH_BUDGET;
+      tileBudget = STARTING_TILE_BUDGET;
       updateHUD();
       if (gameState === GameStates.PLANNING) setStartButton(false);
       playRemoveSound();
     }
 
     function resetPathBudget() {
-      // Add +20 budget without removing tiles — used between waves 1-10
-      pathBudget = Math.min(pathBudget + PATH_BUDGET, 99);  // cap at 99 so display doesn't break
+      // Tile budget progression (after each wave completes):
+      // Waves 1-9:  +8 each → 8, 16, 24...80 (wave 9 complete)
+      // Wave 10:    no change → stays 80
+      // Waves 11+:  +2 each → 82, 84... capped at 110
+      if (tileBudget >= MAX_TILE_BUDGET) { updateHUD(); return; }
+      if (currentWave < BASE_WAVES) {
+        tileBudget = Math.min(tileBudget + TILE_ACCUM_WAVES, MAX_TILE_BUDGET);
+      } else if (currentWave === BASE_WAVES) {
+        // Wave 10: no accumulation (max base tiles reached)
+      } else {
+        const target = 80 + (currentWave - BASE_WAVES) * TILE_ACCUM_ENDLESS;
+        tileBudget = Math.min(target, MAX_TILE_BUDGET);
+      }
       updateHUD();
     }
 
