@@ -1537,6 +1537,7 @@
         ctx.fillStyle = '#200a0a';
         ctx.fill();
       } else if (type === 'FROST') {
+        ctx.translate(cx, cy);
         ctx.rotate(Math.PI / 6);
         ctx.globalAlpha = 0.85;
         ctx.fillStyle = color;
