@@ -219,6 +219,7 @@
         <span>PATH</span>
         <div id="budget-track"><div id="budget-fill" style="width:0%"></div></div>
         <span id="budget-text">0/20</span>
+        <button id="clear-btn" style="background:#333;border:none;color:#aaa;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer;margin-left:4px">CLEAR</button>
       </div>
       <button id="start-btn" class="pulsing">START WAVE</button>
     </div>
@@ -716,6 +717,7 @@
           gameState = GameStates.VICTORY;
           showOverlay('VICTORY');
         } else {
+          clearPath();
           currency += WAVE_BONUS;
           gameState = GameStates.PLANNING;
           setStartButton(true);
@@ -1055,9 +1057,19 @@
       setStartButton(validatePath());
     }
 
-    function restartGame() {
+    function clearPath() {
+      // Remove all path tiles and refund budget
+      for (const tile of pathTiles) {
+        grid[tile.row][tile.col] = CELL_TYPES.EMPTY;
+      }
       pathTiles = [];
       pathBudget = PATH_BUDGET;
+      updateHUD();
+      playRemoveSound();
+    }
+
+    function restartGame() {
+      clearPath();
       currency = STARTING_CURRENCY;
       baseHP = BASE_HP;
       currentWave = 1;
@@ -1339,6 +1351,12 @@
       startBtn.addEventListener('click', () => {
         if (gameState === GameStates.PLANNING) {
           startWave();
+        }
+      });
+
+      document.getElementById('clear-btn').addEventListener('click', () => {
+        if (gameState === GameStates.PLANNING || gameState === GameStates.MENU) {
+          clearPath();
         }
       });
 
