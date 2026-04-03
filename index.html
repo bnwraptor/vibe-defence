@@ -1027,16 +1027,18 @@
         `;
         document.getElementById('overlay-restart-btn').addEventListener('click', restartGame);
       } else if (type === 'PAUSED') {
-        console.log('[SHOWOVERLAY] Building PAUSED overlay');
+        console.log('[SHOWOVERLAY] Building PAUSED overlay, current innerHTML:', overlay.innerHTML.substring(0, 50));
         overlay.innerHTML = `
           <h1>PAUSED</h1>
           <button class="big-btn" id="overlay-resume-btn">RESUME</button>
         `;
+        console.log('[SHOWOVERLAY] After setting innerHTML, overlay.classList:', overlay.className);
         const resumeBtn = document.getElementById('overlay-resume-btn');
         console.log('[SHOWOVERLAY] resumeBtn found:', resumeBtn);
         if (resumeBtn) {
-          resumeBtn.addEventListener('click', resumeGame);
-          console.log('[SHOWOVERLAY] resume listener attached');
+          // Use onclick directly to ensure it fires
+          resumeBtn.onclick = resumeGame;
+          console.log('[SHOWOVERLAY] resume onclick set to resumeGame');
         } else {
           console.error('[SHOWOVERLAY] ERROR: resumeBtn is null!');
         }
