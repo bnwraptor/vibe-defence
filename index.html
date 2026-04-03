@@ -1343,14 +1343,25 @@
       });
 
       pauseBtn.addEventListener('click', () => {
-        console.log('[PAUSE] click handler fired, current state:', gameState);
+        console.log('[PAUSE] click event fired! current state:', gameState);
         if (gameState === GameStates.WAVE_ACTIVE) {
           console.log('[PAUSE] Pausing game, showing overlay');
           gameState = GameStates.PAUSED;
           showOverlay('PAUSED');
           console.log('[PAUSE] gameState is now:', gameState);
         } else {
-          console.log('[PAUSE] Ignored - not in WAVE_ACTIVE state');
+          console.log('[PAUSE] Ignored - not in WAVE_ACTIVE state, must be WAVE_ACTIVE to pause');
+        }
+      });
+      
+      // Also handle touchend for mobile Safari
+      pauseBtn.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        console.log('[PAUSE] touchend event fired! current state:', gameState);
+        if (gameState === GameStates.WAVE_ACTIVE) {
+          console.log('[PAUSE] Pausing game via touchend');
+          gameState = GameStates.PAUSED;
+          showOverlay('PAUSED');
         }
       });
 
