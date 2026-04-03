@@ -325,6 +325,7 @@
     let towers = [];
     let enemies = [];
     let projectiles = [];
+    let deathParticles = [];  // {x, y, vx, vy, color, size, life, maxLife}
     let pathTiles = [];
     let tileBudget = STARTING_TILE_BUDGET;  // total tiles available (accumulates)
     let currency = STARTING_CURRENCY;
@@ -713,6 +714,23 @@
       currency += enemy.reward;
       playDeathSound();
       updateHUD();
+      // Spawn death particles at enemy position
+      const cx = (enemy.col + 0.5) * cellSize;
+      const cy = (enemy.row + 0.5) * cellSize;
+      const particleCount = enemy.shape === 'large' ? 12 : 8;
+      for (let i = 0; i < particleCount; i++) {
+        const angle = (i / particleCount) * Math.PI * 2 + Math.random() * 0.5;
+        const speed = 50 + Math.random() * 80;
+        deathParticles.push({
+          x: cx, y: cy,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          color: enemy.color,
+          size: enemy.shape === 'large' ? 4 + Math.random() * 4 : 3 + Math.random() * 3,
+          life: 1.0,
+          maxLife: 0.5 + Math.random() * 0.3
+        });
+      }
     }
 
     // === PROJECTILES ===
@@ -748,6 +766,41 @@
           proj.row += (dy / dist) * speed;
         }
       }
+    }
+
+    // === DEATH PARTICLES ===
+    function updateDeathParticles(dt) {
+      for (let i = deathParticles.length - 1; i >= 0; i--) {
+        const p = deathParticles[i];
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        // Gravity
+        p.vy += 80 * dt;
+        // Slow down
+        p.vx *= 0.96;
+        p.vy *= 0.96;
+        p.life -= dt;
+        if (p.life <= 0) {
+          deathParticles.splice(i, 1);
+        }
+      }
+    }
+
+    function drawDeathParticles() {
+      for (const p of deathParticles) {
+        const alpha = p.life / (p.maxLife || 1);
+        const size = p.size * alpha;
+        if (size <= 0) continue;
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = p.color;
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur = 4;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
     }
 
     // === WAVE SYSTEM ===
@@ -1401,6 +1454,7 @@
       drawTowers();
       drawEnemies();
       drawProjectiles();
+      drawDeathParticles();
       drawSpawnAndBase();
 
       if (flashTiles.length > 0) {
@@ -1955,6 +2009,9 @@
       if (screenShake.duration > 0) {
         screenShake.duration -= dt;
       }
+
+      // Death particles update (always run, even when paused)
+      updateDeathParticles(dt);
 
       // Power-up timers
       if (powerFreezeTimer > 0) powerFreezeTimer -= dt;
