@@ -10,6 +10,7 @@
       width: 100%; height: 100%;
       background: #0a0a0f;
       overflow: hidden;
+      overscroll-behavior: none;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       touch-action: none;
       user-select: none;
@@ -766,22 +767,38 @@
     }
 
     // === INPUT ===
+    // === INPUT (Pointer Events — unified touch/mouse, avoids iOS Safari dual-fire bug) ===
+    let activeTouchId = null; // Track unique pointer to avoid iOS Safari mouse-emulation bugs
+
     function screenToCell(screenX, screenY) {
       const rect = canvas.getBoundingClientRect();
-      const x = (screenX - rect.left) * dpr;
-      const y = (screenY - rect.top) * dpr;
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const x = (screenX - rect.left) * scaleX;
+      const y = (screenY - rect.top) * scaleY;
       const col = Math.floor(x / cellSize);
       const row = Math.floor(y / cellSize);
+      console.log('[screenToCell] x:', x, 'y:', y, 'col:', col, 'row:', row);
       if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return null;
       return { col, row };
     }
 
     function handlePointerDown(e) {
-      if (gameState !== GameStates.PLANNING) return;
+      console.log('[pointerdown] type:', e.pointerType, 'x:', e.clientX, 'y:', e.clientY, 'gameState:', gameState);
+      if (gameState !== GameStates.PLANNING) { console.log('[pointerdown] REJECTED: wrong state'); return; }
       e.preventDefault();
-      const touch = e.touches ? e.touches[0] : e;
-      const cell = screenToCell(touch.clientX, touch.clientY);
-      if (!cell) return;
+
+      // Reject if this is a mouse event emulated after touch (iOS Safari fix)
+      if (e.pointerType === 'mouse' && activeTouchId === null) {
+        // Could be real mouse or emulated — accept it
+      }
+      if (e.pointerType === 'touch') {
+        activeTouchId = e.pointerId;
+      }
+
+      const cell = screenToCell(e.clientX, e.clientY);
+      console.log('[pointerdown] cell:', cell);
+      if (!cell) { console.log('[pointerdown] REJECTED: no cell'); return; }
 
       pointerDown = true;
       pointerStart = cell;
@@ -790,6 +807,7 @@
       longPressTimer = setTimeout(() => {
         if (pointerDown && pointerStart && pointerStart.col === cell.col && pointerStart.row === cell.row) {
           if (isPathTile(cell.col, cell.row)) {
+            console.log('[longpress] removing tile');
             removePathTile(cell.col, cell.row);
             pointerDown = false;
             pointerStart = null;
@@ -800,12 +818,15 @@
 
     function handlePointerMove(e) {
       if (!pointerDown || gameState !== GameStates.PLANNING) return;
+      // Only handle the active pointer id (ignores other fingers)
+      if (e.pointerType === 'touch' && e.pointerId !== activeTouchId) return;
       e.preventDefault();
-      const touch = e.touches ? e.touches[0] : e;
-      const cell = screenToCell(touch.clientX, touch.clientY);
+
+      const cell = screenToCell(e.clientX, e.clientY);
       if (!cell) return;
 
       if (pointerLastCell && (cell.col !== pointerLastCell.col || cell.row !== pointerLastCell.row)) {
+        console.log('[pointermove] drawing from', pointerLastCell, 'to', cell);
         if (isCellEmpty(cell.col, cell.row) && !isPathTile(cell.col, cell.row)) {
           placePathTile(cell.col, cell.row);
         }
@@ -814,32 +835,34 @@
     }
 
     function handlePointerUp(e) {
-      if (!pointerDown) return;
+      console.log('[pointerup] pointerDown was:', pointerDown);
+      if (!pointerDown) { console.log('[pointerup] REJECTED: not down'); return; }
       e.preventDefault();
       clearTimeout(longPressTimer);
 
-      const touch = e.changedTouches ? e.changedTouches[0] : e;
       const cell = pointerStart;
+      if (!cell) { pointerDown = false; pointerStart = null; pointerLastCell = null; return; }
 
       const moved = pointerLastCell && (
-        Math.abs(pointerLastCell.col - pointerStart.col) > 2 ||
-        Math.abs(pointerLastCell.row - pointerStart.row) > 2
+        Math.abs(pointerLastCell.col - pointerStart.col) > 1 ||
+        Math.abs(pointerLastCell.row - pointerStart.row) > 1
       );
 
-      if (!moved && cell) {
+      console.log('[pointerup] cell:', cell, 'moved:', moved);
+
+      if (!moved) {
         const now = Date.now();
         const isDoubleTap = lastTapCell &&
           lastTapCell.col === cell.col &&
           lastTapCell.row === cell.row &&
           now - lastTapTime < DOUBLE_TAP_DELAY;
+        console.log('[pointerup] tap detected, isDoubleTap:', isDoubleTap, 'cellType:', getCellAt(cell.col, cell.row));
 
         if (isPathTile(cell.col, cell.row)) {
-          if (isDoubleTap) {
-            removePathTile(cell.col, cell.row);
-          } else {
-            removePathTile(cell.col, cell.row);
-          }
+          console.log('[pointerup] removing path tile');
+          removePathTile(cell.col, cell.row);
         } else if (getCellAt(cell.col, cell.row) === CELL_TYPES.EMPTY) {
+          console.log('[pointerup] placing path tile');
           placePathTile(cell.col, cell.row);
         } else if (getCellAt(cell.col, cell.row) === CELL_TYPES.TOWER) {
           const tower = getTowerAt(cell.col, cell.row);
@@ -853,6 +876,16 @@
       pointerDown = false;
       pointerStart = null;
       pointerLastCell = null;
+      activeTouchId = null;
+    }
+
+    function handlePointerCancel(e) {
+      console.log('[pointercancel]');
+      clearTimeout(longPressTimer);
+      pointerDown = false;
+      pointerStart = null;
+      pointerLastCell = null;
+      activeTouchId = null;
     }
 
     function isCellEmpty(col, row) {
@@ -860,14 +893,17 @@
     }
 
     function setupInput() {
-      canvas.addEventListener('mousedown', handlePointerDown);
-      canvas.addEventListener('mousemove', handlePointerMove);
-      canvas.addEventListener('mouseup', handlePointerUp);
-      canvas.addEventListener('mouseleave', handlePointerUp);
-      canvas.addEventListener('touchstart', handlePointerDown, { passive: false });
-      canvas.addEventListener('touchmove', handlePointerMove, { passive: false });
-      canvas.addEventListener('touchend', handlePointerUp, { passive: false });
-      canvas.addEventListener('touchcancel', handlePointerUp, { passive: false });
+      // Use Pointer Events API — unified touch/mouse handling, avoids iOS Safari
+      // dual-fire bug where touchend is followed by spurious mousedown/mouseup
+      canvas.addEventListener('pointerdown', handlePointerDown, { passive: false });
+      canvas.addEventListener('pointermove', handlePointerMove, { passive: false });
+      canvas.addEventListener('pointerup', handlePointerUp, { passive: false });
+      canvas.addEventListener('pointercancel', handlePointerCancel, { passive: false });
+      canvas.addEventListener('pointerleave', handlePointerUp, { passive: false });
+      // Prevent mouse emulated events on iOS after touch
+      canvas.addEventListener('mousedown', e => e.preventDefault(), { passive: false });
+      // Prevent context menu and text selection
+      canvas.addEventListener('contextmenu', e => e.preventDefault());
     }
 
     // === HUD ===
