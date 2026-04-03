@@ -368,6 +368,7 @@
       playPlaceSound();
       flashTile(col, row, '#4a4a6a', 100);
       updateHUD();
+      if (gameState === GameStates.PLANNING) setStartButton(true);
       return true;
     }
 
@@ -379,6 +380,7 @@
       grid[row][col] = CELL_TYPES.EMPTY;
       playRemoveSound();
       updateHUD();
+      if (gameState === GameStates.PLANNING) setStartButton(pathTiles.length > 0);
       return true;
     }
 
@@ -718,9 +720,11 @@
           showOverlay('VICTORY');
         } else {
           clearPath();
+          clearPath();
           currency += WAVE_BONUS;
           gameState = GameStates.PLANNING;
-          setStartButton(true);
+          // After clearing, require player to draw a new path before starting
+          setStartButton(false);
           updateHUD();
           playWaveCompleteSound();
         }
@@ -1054,7 +1058,8 @@
     function startGame() {
       hideOverlay();
       gameState = GameStates.PLANNING;
-      setStartButton(validatePath());
+      // Require at least one path tile to be placed before starting a wave
+      setStartButton(pathTiles.length > 0);
     }
 
     function clearPath() {
@@ -1065,6 +1070,7 @@
       pathTiles = [];
       pathBudget = PATH_BUDGET;
       updateHUD();
+      if (gameState === GameStates.PLANNING) setStartButton(false);
       playRemoveSound();
     }
 
