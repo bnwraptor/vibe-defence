@@ -1108,27 +1108,42 @@
           <p class="how-text">Your towers automatically attack enemies that come within range.</p>
           <p class="how-text">Enemies that reach the base deal damage. Don't let your HP reach zero!</p>
           <p class="how-text">Survive all 10 waves to win.</p>
-          <h2 style="color:#fff;font-size:16px;margin:16px 0 8px">Tower Stats</h2>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;max-width:340px;color:#ccc;font-size:12px;text-align:left">
-            <div style="background:#1a1a2e;padding:8px;border-radius:6px">
-              <span style="color:#00ffff;font-weight:bold">TURRET</span><br>
-              Range: 3 &nbsp; DMG: 10 &nbsp; Rate: 0.5s
+          <h2 style="color:#fff;font-size:16px;margin:16px 0 8px">Your Towers</h2>
+          <div id="tower-previews" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;max-width:380px;color:#ccc;font-size:11px;text-align:left">
+            <div style="background:#1a1a2e;padding:10px;border-radius:8px;display:flex;align-items:center;gap:10px">
+              <canvas id="preview-turret" width="50" height="50" style="image-rendering:pixelated"></canvas>
+              <div><span style="color:#00ffff;font-weight:bold">TURRET</span><br>Range: 3 &nbsp; DMG: 10 &nbsp; Rate: 0.5s<br><span style="color:#666">Fast firing, balanced</span></div>
             </div>
-            <div style="background:#1a1a2e;padding:8px;border-radius:6px">
-              <span style="color:#ff8800;font-weight:bold">CANNON</span><br>
-              Range: 2 &nbsp; DMG: 40 &nbsp; Rate: 2s
+            <div style="background:#1a1a2e;padding:10px;border-radius:8px;display:flex;align-items:center;gap:10px">
+              <canvas id="preview-cannon" width="50" height="50" style="image-rendering:pixelated"></canvas>
+              <div><span style="color:#ff8800;font-weight:bold">CANNON</span><br>Range: 2 &nbsp; DMG: 40 &nbsp; Rate: 2s<br><span style="color:#666">Slow, high damage</span></div>
             </div>
-            <div style="background:#1a1a2e;padding:8px;border-radius:6px">
-              <span style="color:#ff4444;font-weight:bold">SNIPER</span><br>
-              Range: 6 &nbsp; DMG: 80 &nbsp; Rate: 3s
+            <div style="background:#1a1a2e;padding:10px;border-radius:8px;display:flex;align-items:center;gap:10px">
+              <canvas id="preview-sniper" width="50" height="50" style="image-rendering:pixelated"></canvas>
+              <div><span style="color:#ff4444;font-weight:bold">SNIPER</span><br>Range: 6 &nbsp; DMG: 80 &nbsp; Rate: 3s<br><span style="color:#666">Long range, max damage</span></div>
             </div>
-            <div style="background:#1a1a2e;padding:8px;border-radius:6px">
-              <span style="color:#4488ff;font-weight:bold">FROST</span><br>
-              Range: 2.5 &nbsp; DMG: 5 &nbsp; Rate: 1s &nbsp; <span style="color:#88aaff">Slows 50%</span>
+            <div style="background:#1a1a2e;padding:10px;border-radius:8px;display:flex;align-items:center;gap:10px">
+              <canvas id="preview-frost" width="50" height="50" style="image-rendering:pixelated"></canvas>
+              <div><span style="color:#4488ff;font-weight:bold">FROST</span><br>Range: 2.5 &nbsp; DMG: 5 &nbsp; Rate: 1s<br><span style="color:#88aaff">Slows enemies 50%</span></div>
             </div>
           </div>
-          <button class="big-btn" id="overlay-back-btn" style="margin-top:20px">BACK</button>
+          <h2 style="color:#fff;font-size:14px;margin:14px 0 6px">Power-Ups</h2>
+          <div style="display:flex;gap:10px;font-size:11px;color:#aaa">
+            <span>❄ <span style="color:#88aaff">Freeze 20💰</span></span>
+            <span>💥 <span style="color:#ff8800">Nuke 35💰</span></span>
+            <span>⚡ <span style="color:#ffd700">Boost 25💰</span></span>
+          </div>
+          <button class="big-btn" id="overlay-back-btn" style="margin-top:18px">BACK</button>
         `;
+
+        // Draw tower previews after overlay is built
+        requestAnimationFrame(() => {
+          drawTowerPreview('preview-turret', 'TURRET', '#00ffff');
+          drawTowerPreview('preview-cannon', 'CANNON', '#ff8800');
+          drawTowerPreview('preview-sniper', 'SNIPER', '#ff4444');
+          drawTowerPreview('preview-frost', 'FROST', '#4488ff');
+        });
+
         document.getElementById('overlay-back-btn').addEventListener('click', () => showOverlay('MENU'));
       } else if (type === 'GAME_OVER') {
         overlay.innerHTML = `
@@ -1451,6 +1466,121 @@
         ctx.lineWidth = 2;
         ctx.strokeRect(tile.col * cellSize + 2, tile.row * cellSize + 2, cellSize - 4, cellSize - 4);
       }
+    }
+
+    // Draws a small tower preview on a named canvas element (for HOW TO PLAY screen)
+    function drawTowerPreview(canvasId, type, color) {
+      const c = document.getElementById(canvasId);
+      if (!c) return;
+      const ctx = c.getContext('2d');
+      const w = c.width;
+      const h = c.height;
+      const cx = w / 2;
+      const cy = h / 2;
+      const baseSize = Math.min(w, h) * 0.75;
+      ctx.clearRect(0, 0, w, h);
+
+      ctx.save();
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 8;
+
+      if (type === 'TURRET') {
+        ctx.fillStyle = '#1a2a3a';
+        ctx.fillRect(cx - baseSize / 2, cy - baseSize / 2, baseSize, baseSize);
+        ctx.fillStyle = color;
+        ctx.fillRect(cx - baseSize * 0.1, cy - baseSize * 0.1, baseSize * 0.65, baseSize * 0.2);
+        ctx.beginPath();
+        ctx.arc(cx, cy, baseSize * 0.28, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(cx, cy, baseSize * 0.15, 0, Math.PI * 2);
+        ctx.fillStyle = '#0a1520';
+        ctx.fill();
+      } else if (type === 'CANNON') {
+        ctx.fillStyle = '#2a1a0a';
+        ctx.fillRect(cx - baseSize / 2, cy - baseSize / 2, baseSize, baseSize);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(cx - baseSize / 2 + 2, cy - baseSize / 2 + 2, baseSize - 4, baseSize - 4);
+        ctx.fillStyle = color;
+        ctx.fillRect(cx - baseSize * 0.05, cy - baseSize * 0.18, baseSize * 0.5, baseSize * 0.36);
+        ctx.beginPath();
+        ctx.arc(cx, cy, baseSize * 0.3, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(cx, cy, baseSize * 0.18, 0, Math.PI * 2);
+        ctx.fillStyle = '#1a0a00';
+        ctx.fill();
+      } else if (type === 'SNIPER') {
+        ctx.fillStyle = '#1a0a0a';
+        ctx.fillRect(cx - baseSize / 2, cy - baseSize / 2, baseSize, baseSize);
+        ctx.fillStyle = color;
+        ctx.fillRect(cx - baseSize / 2, cy - baseSize / 2, baseSize * 0.15, baseSize * 0.15);
+        ctx.fillRect(cx + baseSize / 2 - baseSize * 0.15, cy - baseSize / 2, baseSize * 0.15, baseSize * 0.15);
+        ctx.fillRect(cx - baseSize / 2, cy + baseSize / 2 - baseSize * 0.15, baseSize * 0.15, baseSize * 0.15);
+        ctx.fillRect(cx + baseSize / 2 - baseSize * 0.15, cy + baseSize / 2 - baseSize * 0.15, baseSize * 0.15, baseSize * 0.15);
+        ctx.fillStyle = color;
+        ctx.fillRect(cx - baseSize * 0.05, cy - baseSize * 0.07, baseSize * 0.9, baseSize * 0.14);
+        ctx.beginPath();
+        ctx.arc(cx, cy, baseSize * 0.22, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(cx, cy - baseSize * 0.28, baseSize * 0.1, 0, Math.PI * 2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(cx, cy, baseSize * 0.12, 0, Math.PI * 2);
+        ctx.fillStyle = '#200a0a';
+        ctx.fill();
+      } else if (type === 'FROST') {
+        ctx.rotate(Math.PI / 6);
+        ctx.globalAlpha = 0.85;
+        ctx.fillStyle = color;
+        ctx.shadowBlur = 15;
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2;
+          const r = baseSize * 0.48;
+          if (i === 0) ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+          else ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = '#0a1a3a';
+        ctx.shadowBlur = 0;
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2;
+          const r = baseSize * 0.28;
+          if (i === 0) ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+          else ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.4;
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2;
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(Math.cos(a) * baseSize * 0.45, Math.sin(a) * baseSize * 0.45);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+        ctx.beginPath();
+        ctx.arc(0, 0, baseSize * 0.1, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 8;
+        ctx.fill();
+      }
+      ctx.restore();
     }
 
     function drawTowers() {
