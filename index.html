@@ -1350,9 +1350,10 @@
     }
 
     function clearPath() {
-      // Remove all path tiles from grid but KEEP accumulated budget
+      // Remove all path tiles and refund their cost back to budget
       for (const tile of pathTiles) {
         grid[tile.row][tile.col] = CELL_TYPES.EMPTY;
+        tileBudget++;
       }
       pathTiles = [];
       updateHUD();
