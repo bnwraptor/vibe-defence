@@ -1473,12 +1473,14 @@
       const wrapper = document.getElementById('canvas-wrapper');
       const maxW = wrapper.clientWidth;
       const maxH = wrapper.clientHeight;
-      cellSize = Math.floor(Math.min(maxW / COLS, maxH / ROWS));
-      // Render at native DPR for crisp visuals on Retina/HiDPI displays
-      canvas.width = COLS * cellSize * dpr;
-      canvas.height = ROWS * cellSize * dpr;
-      canvas.style.width = `${COLS * cellSize}px`;
-      canvas.style.height = `${ROWS * cellSize}px`;
+      // Compute cellSize in physical pixels so canvas internals match DPR scaling
+      cellSize = Math.floor(Math.min((maxW * dpr) / COLS, (maxH * dpr) / ROWS));
+      // Canvas renders at full physical pixel resolution
+      canvas.width = COLS * cellSize;
+      canvas.height = ROWS * cellSize;
+      // CSS size is smaller (CSS pixels = physical / dpr)
+      canvas.style.width = `${COLS * cellSize / dpr}px`;
+      canvas.style.height = `${ROWS * cellSize / dpr}px`;
     }
 
     function render() {
