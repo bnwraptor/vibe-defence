@@ -349,3 +349,44 @@ JS sections (clearly commented):
 - [ ] ~Instant start
 - [ ] Mobile-friendly / touch-native
 - [ ] Lightweight (runs on any mobile device)
+
+---
+
+## 17. Endless Mode (Wave 11+)
+
+After completing the 10 structured waves, the game transitions to **Endless Mode**.
+
+### Wave Generation
+- Waves 1–10: Fixed compositions from the table above
+- Wave 11+: Procedurally generated using `generateWave(n)`:
+  - Enemy counts scale by `1 + (n - 10) * 0.20` per wave
+  - Enemy speed increases by 3% per endless wave
+  - Scouts reappear after wave 15
+  - Boss enemies appear every 5th endless wave
+
+### Procedural Formula
+```
+scale = 1 + (waveNumber - 10) * 0.20
+speedMult = 1 + (waveNumber - 10) * 0.03
+soldiers = floor(20 * scale)
+tanks = floor(10 * scale)
+speedsters = floor(10 * scale)
+bosses = floor(5 * scale) + floor(waveNumber / 5)
+```
+
+### Endless Mode Features
+- No VICTORY screen — survive as long as possible
+- Wave counter continues indefinitely (shows 🔁 badge)
+- Score and currency continue to accumulate
+- Enemy HP scaling continues from base formula
+
+### Game Over
+- Still triggered when Base HP reaches 0
+- Shows waves survived and final score
+- Restart resets to Wave 1 (structured mode)
+
+### Future Enhancements (Not Implemented)
+- Difficulty tiers every 10 waves (Tier 1, Tier 2, etc.)
+- Elite enemies with 2x HP after wave 20
+- High score persistence in localStorage
+- Wave preview text between waves

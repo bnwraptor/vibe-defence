@@ -248,7 +248,8 @@
     const BASE_HP = 100;
     const STARTING_CURRENCY = 100;
     const WAVE_BONUS = 20;
-    const MAX_WAVES = 10;
+    const BASE_WAVES = 10;
+    const ENDLESS_START = 11;
     const SPAWN_INTERVAL = 0.8;
     const WAVE_DELAY = 3;
     const PROJ_SPEED = 400;
@@ -291,6 +292,7 @@
     let baseHP = BASE_HP;
     let currentWave = 1;
     let waveEnemyQueue = [];
+    let waveSpeedMult = 1.0;
     let spawnTimer = 0;
     let lastTime = 0;
     let pathInvalidFlash = 0;
@@ -556,13 +558,14 @@
     function spawnEnemy(type) {
       const typeData = ENEMY_TYPES[type];
       const hpScale = 1 + (currentWave - 1) * 0.15;
+      const speed = typeData.speed * waveSpeedMult;
       enemies.push({
         type,
         col: SPAWN_POS.col,
         row: SPAWN_POS.row,
         hp: typeData.baseHP * hpScale,
         maxHP: typeData.baseHP * hpScale,
-        speed: typeData.speed,
+        speed: speed,
         reward: typeData.reward,
         color: typeData.color,
         shape: typeData.shape,
@@ -681,13 +684,49 @@
     }
 
     // === WAVE SYSTEM ===
+    function generateWave(n) {
+      // Scale from wave 10 baseline, escalating difficulty
+      const scale = 1 + (n - 10) * 0.2;  // 20% harder each endless wave
+      const speedMult = 1 + (n - 10) * 0.03;  // 3% faster per wave
+
+      // Base: wave 10 composition scaled up
+      let soldiers = Math.floor(20 * scale);
+      let tanks = Math.floor(10 * scale);
+      let speedsters = Math.floor(10 * scale);
+      let bosses = Math.floor(5 * scale);
+      let scouts = n >= 15 ? Math.floor(10 * scale) : 0;
+
+      // Every 5th endless wave gets extra bosses
+      if (n % 5 === 0) bosses += Math.floor(n / 5);
+
+      // Build queue
+      const queue = [];
+      for (let i = 0; i < scouts; i++) queue.push('SCOUT');
+      for (let i = 0; i < soldiers; i++) queue.push('SOLDIER');
+      for (let i = 0; i < tanks; i++) queue.push('TANK');
+      for (let i = 0; i < speedsters; i++) queue.push('SPEEDSTER');
+      for (let i = 0; i < bosses; i++) queue.push('BOSS');
+
+      // Shuffle the queue so enemies don't clump by type
+      for (let i = queue.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [queue[i], queue[j]] = [queue[j], queue[i]];
+      }
+
+      return queue;
+    }
+
     function buildWaveQueue() {
       waveEnemyQueue = [];
-      const waveDef = WAVE_DEFINITIONS[currentWave - 1];
-      for (const group of waveDef) {
-        for (let i = 0; i < group.count; i++) {
-          waveEnemyQueue.push(group.type);
+      if (currentWave <= BASE_WAVES) {
+        const waveDef = WAVE_DEFINITIONS[currentWave - 1];
+        for (const group of waveDef) {
+          for (let i = 0; i < group.count; i++) {
+            waveEnemyQueue.push(group.type);
+          }
         }
+      } else {
+        waveEnemyQueue = generateWave(currentWave);
       }
     }
 
@@ -715,15 +754,19 @@
 
       if (waveEnemyQueue.length === 0 && enemies.length === 0) {
         currentWave++;
-        if (currentWave > MAX_WAVES) {
-          gameState = GameStates.VICTORY;
-          showOverlay('VICTORY');
-        } else {
+        if (currentWave > BASE_WAVES) {
+          // Endless mode — keep going
           clearPath();
+          waveSpeedMult = 1 + (currentWave - 10) * 0.03;  // update speed scaling
+          currency += WAVE_BONUS;
+          gameState = GameStates.PLANNING;
+          setStartButton(false);
+          updateHUD();
+          playWaveCompleteSound();
+        } else {
           clearPath();
           currency += WAVE_BONUS;
           gameState = GameStates.PLANNING;
-          // After clearing, require player to draw a new path before starting
           setStartButton(false);
           updateHUD();
           playWaveCompleteSound();
@@ -919,7 +962,9 @@
     let lastBudgetText = '';
 
     function updateHUD() {
-      const waveStr = `WAVE ${currentWave}/${MAX_WAVES}`;
+      const waveStr = currentWave <= BASE_WAVES
+        ? `WAVE ${currentWave}/${BASE_WAVES}`
+        : `WAVE ${currentWave} 🔁`;
       if (waveStr !== lastWaveText) {
         waveText.textContent = waveStr;
         lastWaveText = waveStr;
@@ -1079,6 +1124,7 @@
       currency = STARTING_CURRENCY;
       baseHP = BASE_HP;
       currentWave = 1;
+      waveSpeedMult = 1.0;
       enemies = [];
       projectiles = [];
       waveEnemyQueue = [];
