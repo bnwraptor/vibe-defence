@@ -109,6 +109,7 @@
       0%, 100% { box-shadow: 0 0 0 0 rgba(64,145,108,0.5); }
       50% { box-shadow: 0 0 0 8px rgba(64,145,108,0); }
     }
+    #buy-hp-btn:disabled { opacity: 0.35; cursor: default; }
     #pause-btn {
       position: fixed;
       top: 12px; right: 12px;
@@ -220,6 +221,7 @@
         <div id="budget-track"><div id="budget-fill" style="width:0%"></div></div>
         <span id="budget-text">0/20</span>
         <button id="clear-btn" style="background:#333;border:none;color:#aaa;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer;margin-left:4px">CLEAR</button>
+        <button id="buy-hp-btn" style="background:#441111;border:none;color:#ff6666;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer;margin-left:4px">+HP 15💰</button>
       </div>
       <button id="start-btn" class="pulsing">START WAVE</button>
     </div>
@@ -250,6 +252,8 @@
     const WAVE_BONUS = 20;
     const BASE_WAVES = 10;
     const ENDLESS_START = 11;
+    const HP_COST = 15;
+    const HP_RESTORE = 10;
     const SPAWN_INTERVAL = 0.8;
     const WAVE_DELAY = 3;
     const PROJ_SPEED = 400;
@@ -762,6 +766,7 @@
           gameState = GameStates.PLANNING;
           setStartButton(false);
           updateHUD();
+          updateBuyHpButton();
           playWaveCompleteSound();
         } else {
           clearPath();
@@ -769,6 +774,7 @@
           gameState = GameStates.PLANNING;
           setStartButton(false);
           updateHUD();
+          updateBuyHpButton();
           playWaveCompleteSound();
         }
       }
@@ -1105,6 +1111,7 @@
       gameState = GameStates.PLANNING;
       // Require at least one path tile to be placed before starting a wave
       setStartButton(pathTiles.length > 0);
+      updateBuyHpButton();
     }
 
     function clearPath() {
@@ -1117,6 +1124,32 @@
       updateHUD();
       if (gameState === GameStates.PLANNING) setStartButton(false);
       playRemoveSound();
+    }
+
+    function buyHP() {
+      if (gameState !== GameStates.PLANNING) return;
+      if (currency < HP_COST) {
+        showTooltip('Not enough currency!');
+        return;
+      }
+      if (baseHP >= BASE_HP) {
+        showTooltip('HP already full!');
+        return;
+      }
+      currency -= HP_COST;
+      baseHP = Math.min(baseHP + HP_RESTORE, BASE_HP);
+      updateHUD();
+      updateBuyHpButton();
+      playPlaceSound();
+    }
+
+    function updateBuyHpButton() {
+      const btn = document.getElementById('buy-hp-btn');
+      if (!btn) return;
+      const canAfford = currency >= HP_COST;
+      const hpNotFull = baseHP < BASE_HP;
+      const inPlanning = gameState === GameStates.PLANNING;
+      btn.disabled = !canAfford || !hpNotFull || !inPlanning;
     }
 
     function restartGame() {
@@ -1134,6 +1167,7 @@
       updateHUD();
       gameState = GameStates.PLANNING;
       setStartButton(false);
+      updateBuyHpButton();
     }
 
     function resumeGame() {
@@ -1410,6 +1444,10 @@
         if (gameState === GameStates.PLANNING || gameState === GameStates.MENU) {
           clearPath();
         }
+      });
+
+      document.getElementById('buy-hp-btn').addEventListener('click', () => {
+        buyHP();
       });
 
       pauseBtn.addEventListener('click', () => {
