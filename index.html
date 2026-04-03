@@ -110,6 +110,16 @@
       50% { box-shadow: 0 0 0 8px rgba(64,145,108,0); }
     }
     #buy-hp-btn:disabled { opacity: 0.35; cursor: default; }
+    #freeze-btn.active { opacity: 1 !important; pointer-events: auto !important; background: rgba(68,136,255,0.4) !important; }
+    #nuke-btn.active { opacity: 1 !important; pointer-events: auto !important; background: rgba(255,136,0,0.4) !important; }
+    #boost-btn.active { opacity: 1 !important; pointer-events: auto !important; background: rgba(255,215,0,0.4) !important; }
+    #power-flash {
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      font-size: clamp(32px, 10vw, 64px); font-weight: 900; z-index: 30;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s;
+      text-shadow: 0 0 20px currentColor;
+    }
+    #power-flash.visible { opacity: 1; }
     #pause-btn {
       position: fixed;
       top: 12px; right: 12px;
@@ -227,6 +237,11 @@
     </div>
   </div>
   <button id="pause-btn">⏸</button>
+  <div id="power-btn-bar" style="position:fixed;top:60px;right:12px;display:flex;flex-direction:column;gap:8px;z-index:10">
+    <button id="freeze-btn" style="background:rgba(68,136,255,0.2);border:2px solid #4488ff;color:#88aaff;font-size:16px;width:42px;height:42px;border-radius:50%;cursor:pointer;font-weight:bold;opacity:0.3;pointer-events:none">❄</button>
+    <button id="nuke-btn" style="background:rgba(255,136,0,0.2);border:2px solid #ff8800;color:#ff8800;font-size:16px;width:42px;height:42px;border-radius:50%;cursor:pointer;font-weight:bold;opacity:0.3;pointer-events:none">💥</button>
+    <button id="boost-btn" style="background:rgba(255,215,0,0.2);border:2px solid #ffd700;color:#ffd700;font-size:16px;width:42px;height:42px;border-radius:50%;cursor:pointer;font-weight:bold;opacity:0.3;pointer-events:none">⚡</button>
+  </div>
   <div id="overlay">
     <h1>Vibe Defence</h1>
     <h2>Path Architect</h2>
@@ -238,6 +253,7 @@
     <button class="secondary-btn" id="overlay-how-btn">HOW TO PLAY</button>
   </div>
   <div id="tooltip">Path not connected!</div>
+  <div id="power-flash"></div>
 
   <script>
     // === CONSTANTS ===
@@ -254,6 +270,12 @@
     const ENDLESS_START = 11;
     const HP_COST = 15;
     const HP_RESTORE = 10;
+    const POWER_FREEZE_COST = 20;
+    const POWER_FREEZE_DUR = 3;
+    const POWER_NUKE_COST = 35;
+    const POWER_NUKE_DAMAGE = 50;
+    const POWER_BOOST_COST = 25;
+    const POWER_BOOST_DUR = 5;
     const SPAWN_INTERVAL = 0.8;
     const WAVE_DELAY = 3;
     const PROJ_SPEED = 400;
@@ -303,6 +325,15 @@
     let selectedTower = null;
     let screenShake = { x: 0, y: 0, duration: 0 };
     let tooltipTimer = 0;
+
+    // Power-up state
+    let powerFreezeTimer = 0;
+    let powerBoostTimer = 0;
+    let powerFreezeAvail = true;
+    let powerNukeAvail = true;
+    let powerBoostAvail = true;
+    let powerFlashText = '';
+    let powerFlashTimer = 0;
 
     // Input state
     let pointerDown = false;
@@ -529,6 +560,11 @@
         tower.cooldown = Math.max(0, tower.cooldown - dt);
         if (tower.cooldown > 0) continue;
 
+        // Boost: faster fire rate and double damage
+        const boosted = powerBoostTimer > 0;
+        const effectiveFireRate = boosted ? tower.fireRate * 0.5 : tower.fireRate;
+        const effectiveDamage = boosted ? tower.damage * 2 : tower.damage;
+
         let nearestEnemy = null;
         let nearestDist = Infinity;
         const towerX = tower.col + 0.5;
@@ -543,15 +579,16 @@
         }
 
         if (nearestEnemy) {
-          tower.cooldown = tower.fireRate;
+          tower.cooldown = effectiveFireRate;
           projectiles.push({
             col: tower.col + 0.5,
             row: tower.row + 0.5,
             target: nearestEnemy,
-            damage: tower.damage,
+            damage: effectiveDamage,
             color: tower.color,
             slow: tower.slow,
-            trail: []
+            trail: [],
+            boosted: boosted
           });
           playShootSound();
         }
@@ -598,7 +635,7 @@
           enemy.slowTimer -= dt;
         }
 
-        const speedMod = enemy.slowTimer > 0 ? 0.5 : 1;
+        const speedMod = (enemy.slowTimer > 0 ? 0.5 : 1) * (powerFreezeTimer > 0 ? 0 : 1);
         const moveSpeed = enemy.speed * speedMod * dt;
 
         let targetCol, targetRow;
@@ -741,19 +778,28 @@
         showTooltip('Path not connected!');
         return;
       }
+      // Reset power-ups for this wave
+      powerFreezeAvail = true;
+      powerNukeAvail = true;
+      powerBoostAvail = true;
+      powerFreezeTimer = 0;
+      powerBoostTimer = 0;
       buildWaveQueue();
       spawnTimer = 0;
       gameState = GameStates.WAVE_ACTIVE;
       setStartButton(false);
+      updatePowerButtons();
     }
 
     function updateWave(dt) {
       if (gameState !== GameStates.WAVE_ACTIVE) return;
 
-      spawnTimer += dt;
-      if (spawnTimer >= SPAWN_INTERVAL && waveEnemyQueue.length > 0) {
-        spawnTimer = 0;
-        spawnEnemy(waveEnemyQueue.shift());
+      if (powerFreezeTimer <= 0) {
+        spawnTimer += dt;
+        if (spawnTimer >= SPAWN_INTERVAL && waveEnemyQueue.length > 0) {
+          spawnTimer = 0;
+          spawnEnemy(waveEnemyQueue.shift());
+        }
       }
 
       if (waveEnemyQueue.length === 0 && enemies.length === 0) {
@@ -767,6 +813,7 @@
           setStartButton(false);
           updateHUD();
           updateBuyHpButton();
+          updatePowerButtons();
           playWaveCompleteSound();
         } else {
           clearPath();
@@ -775,6 +822,7 @@
           setStartButton(false);
           updateHUD();
           updateBuyHpButton();
+          updatePowerButtons();
           playWaveCompleteSound();
         }
       }
@@ -1112,6 +1160,7 @@
       // Require at least one path tile to be placed before starting a wave
       setStartButton(pathTiles.length > 0);
       updateBuyHpButton();
+      updatePowerButtons();
     }
 
     function clearPath() {
@@ -1152,6 +1201,77 @@
       btn.disabled = !canAfford || !hpNotFull || !inPlanning;
     }
 
+    // === POWER-UPS ===
+    let powerFlashColor = '#ffffff';
+    function activateFreeze() {
+      if (gameState !== GameStates.WAVE_ACTIVE) return;
+      if (!powerFreezeAvail) return;
+      if (currency < POWER_FREEZE_COST) { showTooltip('Not enough currency!'); return; }
+      currency -= POWER_FREEZE_COST;
+      powerFreezeAvail = false;
+      powerFreezeTimer = POWER_FREEZE_DUR;
+      powerFlashText = 'FROZEN!';
+      powerFlashTimer = 1.0;
+      powerFlashColor = '#88aaff';
+      updateHUD();
+      updatePowerButtons();
+      playTone(200, 0.3, 'sine', 0.15);
+    }
+
+    function activateNuke() {
+      if (gameState !== GameStates.WAVE_ACTIVE) return;
+      if (!powerNukeAvail) return;
+      if (currency < POWER_NUKE_COST) { showTooltip('Not enough currency!'); return; }
+      currency -= POWER_NUKE_COST;
+      powerNukeAvail = false;
+      // Damage all enemies on screen
+      for (const enemy of enemies) {
+        enemy.hp -= POWER_NUKE_DAMAGE;
+        if (enemy.hp <= 0) killEnemy(enemy);
+      }
+      powerFlashText = '💥 NUKE!';
+      powerFlashTimer = 1.0;
+      powerFlashColor = '#ff8800';
+      screenShake.duration = 0.3;
+      updateHUD();
+      updatePowerButtons();
+      playTone(100, 0.5, 'sawtooth', 0.2);
+    }
+
+    function activateBoost() {
+      if (gameState !== GameStates.WAVE_ACTIVE) return;
+      if (!powerBoostAvail) return;
+      if (currency < POWER_BOOST_COST) { showTooltip('Not enough currency!'); return; }
+      currency -= POWER_BOOST_COST;
+      powerBoostAvail = false;
+      powerBoostTimer = POWER_BOOST_DUR;
+      powerFlashText = '⚡ BOOST!';
+      powerFlashTimer = 1.0;
+      powerFlashColor = '#ffd700';
+      updateHUD();
+      updatePowerButtons();
+      playTone(880, 0.2, 'sine', 0.1);
+    }
+
+    function updatePowerButtons() {
+      const inWave = gameState === GameStates.WAVE_ACTIVE;
+      const freezeBtn = document.getElementById('freeze-btn');
+      const nukeBtn = document.getElementById('nuke-btn');
+      const boostBtn = document.getElementById('boost-btn');
+      if (freezeBtn) {
+        freezeBtn.classList.toggle('active', powerFreezeAvail && currency >= POWER_FREEZE_COST && inWave);
+        freezeBtn.disabled = !powerFreezeAvail || currency < POWER_FREEZE_COST || !inWave;
+      }
+      if (nukeBtn) {
+        nukeBtn.classList.toggle('active', powerNukeAvail && currency >= POWER_NUKE_COST && inWave);
+        nukeBtn.disabled = !powerNukeAvail || currency < POWER_NUKE_COST || !inWave;
+      }
+      if (boostBtn) {
+        boostBtn.classList.toggle('active', powerBoostAvail && currency >= POWER_BOOST_COST && inWave);
+        boostBtn.disabled = !powerBoostAvail || currency < POWER_BOOST_COST || !inWave;
+      }
+    }
+
     function restartGame() {
       clearPath();
       currency = STARTING_CURRENCY;
@@ -1161,6 +1281,11 @@
       enemies = [];
       projectiles = [];
       waveEnemyQueue = [];
+      powerFreezeAvail = true;
+      powerNukeAvail = true;
+      powerBoostAvail = true;
+      powerFreezeTimer = 0;
+      powerBoostTimer = 0;
       initGrid();
       initTowers();
       hideOverlay();
@@ -1168,6 +1293,7 @@
       gameState = GameStates.PLANNING;
       setStartButton(false);
       updateBuyHpButton();
+      updatePowerButtons();
     }
 
     function resumeGame() {
@@ -1219,6 +1345,35 @@
             ctx.fillRect(ft.col * cellSize + 1, ft.row * cellSize + 1, cellSize - 2, cellSize - 2);
           }
         }
+      }
+
+      // Power-up visual effects
+      if (powerFreezeTimer > 0) {
+        ctx.fillStyle = 'rgba(68,136,255,0.12)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      if (powerBoostTimer > 0) {
+        // Pulsing glow on towers
+        const pulse = Math.sin(Date.now() / 100) * 0.3 + 0.7;
+        for (const tower of towers) {
+          const cx = tower.col * cellSize + cellSize / 2;
+          const cy = tower.row * cellSize + cellSize / 2;
+          ctx.beginPath();
+          ctx.arc(cx, cy, cellSize * 0.8, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(255,215,0,${pulse * 0.2})`;
+          ctx.fill();
+        }
+      }
+      if (powerFlashTimer > 0) {
+        const el = document.getElementById('power-flash');
+        if (el) {
+          el.textContent = powerFlashText;
+          el.style.color = powerFlashColor;
+          el.style.opacity = Math.min(powerFlashTimer * 2, 1).toString();
+        }
+      } else {
+        const el = document.getElementById('power-flash');
+        if (el) el.style.opacity = '0';
       }
 
       ctx.restore();
@@ -1419,6 +1574,12 @@
         screenShake.duration -= dt;
       }
 
+      // Power-up timers
+      if (powerFreezeTimer > 0) powerFreezeTimer -= dt;
+      if (powerBoostTimer > 0) powerBoostTimer -= dt;
+      if (powerFlashTimer > 0) powerFlashTimer -= dt;
+      updatePowerButtons();
+
       render();
       requestAnimationFrame(gameLoop);
     }
@@ -1449,6 +1610,13 @@
       document.getElementById('buy-hp-btn').addEventListener('click', () => {
         buyHP();
       });
+
+      document.getElementById('freeze-btn').addEventListener('click', activateFreeze);
+      document.getElementById('freeze-btn').addEventListener('touchend', (e) => { e.preventDefault(); activateFreeze(); });
+      document.getElementById('nuke-btn').addEventListener('click', activateNuke);
+      document.getElementById('nuke-btn').addEventListener('touchend', (e) => { e.preventDefault(); activateNuke(); });
+      document.getElementById('boost-btn').addEventListener('click', activateBoost);
+      document.getElementById('boost-btn').addEventListener('touchend', (e) => { e.preventDefault(); activateBoost(); });
 
       pauseBtn.addEventListener('click', () => {
         console.log('[PAUSE] click event fired! current state:', gameState);
