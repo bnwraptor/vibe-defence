@@ -772,7 +772,6 @@
     }
 
     function startWave() {
-      pathBudget = PATH_BUDGET;
       if (!validatePath()) {
         pathInvalidFlash = 0.5;
         showTooltip('Path not connected!');
@@ -1039,12 +1038,12 @@
         lastCurrencyText = currStr;
       }
 
-      const used = PATH_BUDGET - pathBudget;
-      const budgetStr = `${used}/${PATH_BUDGET}`;
+      const used = pathTiles.length;
+      const budgetStr = `${pathBudget}`;
       if (budgetStr !== lastBudgetText) {
         budgetText.textContent = budgetStr;
         lastBudgetText = budgetStr;
-        budgetFill.style.width = `${(used / PATH_BUDGET) * 100}%`;
+        budgetFill.style.width = `${(used / Math.max(pathBudget, 1)) * 100}%`;
       }
     }
 
@@ -1176,8 +1175,8 @@
     }
 
     function resetPathBudget() {
-      // Reset budget counter without removing tiles — used between waves 1-10
-      pathBudget = PATH_BUDGET;
+      // Add +20 budget without removing tiles — used between waves 1-10
+      pathBudget = Math.min(pathBudget + PATH_BUDGET, 99);  // cap at 99 so display doesn't break
       updateHUD();
     }
 
