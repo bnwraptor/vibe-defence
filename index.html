@@ -1027,11 +1027,19 @@
         `;
         document.getElementById('overlay-restart-btn').addEventListener('click', restartGame);
       } else if (type === 'PAUSED') {
+        console.log('[SHOWOVERLAY] Building PAUSED overlay');
         overlay.innerHTML = `
           <h1>PAUSED</h1>
           <button class="big-btn" id="overlay-resume-btn">RESUME</button>
         `;
-        document.getElementById('overlay-resume-btn').addEventListener('click', resumeGame);
+        const resumeBtn = document.getElementById('overlay-resume-btn');
+        console.log('[SHOWOVERLAY] resumeBtn found:', resumeBtn);
+        if (resumeBtn) {
+          resumeBtn.addEventListener('click', resumeGame);
+          console.log('[SHOWOVERLAY] resume listener attached');
+        } else {
+          console.error('[SHOWOVERLAY] ERROR: resumeBtn is null!');
+        }
       }
     }
 
@@ -1063,8 +1071,10 @@
     }
 
     function resumeGame() {
+      console.log('[RESUME] resumeGame called, current state:', gameState);
       hideOverlay();
       gameState = GameStates.WAVE_ACTIVE;
+      console.log('[RESUME] gameState is now:', gameState);
     }
 
     // === RENDERING ===
@@ -1288,12 +1298,17 @@
       const dt = Math.min((timestamp - lastTime) / 1000, 0.1);
       lastTime = timestamp;
 
+      // Always render regardless of state
+      // Game logic updates only when WAVE_ACTIVE (not when PAUSED, PLANNING, MENU, etc.)
       if (gameState === GameStates.WAVE_ACTIVE) {
         updateWave(dt);
         updateTowers(dt);
         updateEnemies(dt);
         updateProjectiles(dt);
         updateHUD();
+      } else if (gameState === GameStates.PAUSED) {
+        // Frozen - no updates, just keep rendering
+        console.log('[GAMELOOP] PAUSED state - game logic frozen');
       }
 
       if (pathInvalidFlash > 0) {
@@ -1326,9 +1341,14 @@
       });
 
       pauseBtn.addEventListener('click', () => {
+        console.log('[PAUSE] click handler fired, current state:', gameState);
         if (gameState === GameStates.WAVE_ACTIVE) {
+          console.log('[PAUSE] Pausing game, showing overlay');
           gameState = GameStates.PAUSED;
           showOverlay('PAUSED');
+          console.log('[PAUSE] gameState is now:', gameState);
+        } else {
+          console.log('[PAUSE] Ignored - not in WAVE_ACTIVE state');
         }
       });
 
