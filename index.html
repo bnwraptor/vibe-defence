@@ -816,10 +816,10 @@
           updatePowerButtons();
           playWaveCompleteSound();
         } else {
-          clearPath();
+          resetPathBudget();
           currency += WAVE_BONUS;
           gameState = GameStates.PLANNING;
-          setStartButton(false);
+          setStartButton(pathTiles.length > 0);
           updateHUD();
           updateBuyHpButton();
           updatePowerButtons();
@@ -1173,6 +1173,12 @@
       updateHUD();
       if (gameState === GameStates.PLANNING) setStartButton(false);
       playRemoveSound();
+    }
+
+    function resetPathBudget() {
+      // Reset budget counter without removing tiles — used between waves 1-10
+      pathBudget = PATH_BUDGET;
+      updateHUD();
     }
 
     function buyHP() {
