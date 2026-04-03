@@ -52,7 +52,6 @@
     }
     #game {
       display: block;
-      image-rendering: pixelated;
     }
     #hud-bottom {
       display: flex;
@@ -1475,8 +1474,9 @@
       const maxW = wrapper.clientWidth;
       const maxH = wrapper.clientHeight;
       cellSize = Math.floor(Math.min(maxW / COLS, maxH / ROWS));
-      canvas.width = COLS * cellSize;
-      canvas.height = ROWS * cellSize;
+      // Render at native DPR for crisp visuals on Retina/HiDPI displays
+      canvas.width = COLS * cellSize * dpr;
+      canvas.height = ROWS * cellSize * dpr;
       canvas.style.width = `${COLS * cellSize}px`;
       canvas.style.height = `${ROWS * cellSize}px`;
     }
