@@ -400,6 +400,7 @@
     let lastTime = 0;
     let pathInvalidFlash = 0;
     let selectedTower = null;
+    let towerRangeTimer = 0;
     let screenShake = { x: 0, y: 0, duration: 0 };
     let tooltipTimer = 0;
     let previewTimer = 0;
@@ -1243,6 +1244,9 @@
         } else if (getCellAt(cell.col, cell.row) === CELL_TYPES.TOWER) {
           const tower = getTowerAt(cell.col, cell.row);
           console.log(`Tower: ${tower.type}, Range: ${tower.range}, Damage: ${tower.damage}, Fire Rate: ${tower.fireRate}s`);
+          // Select tower to show range indicator for 2 seconds
+          selectedTower = tower;
+          towerRangeTimer = 2.0;
         }
 
         lastTapCell = cell;
@@ -2056,6 +2060,19 @@
         const boosted = powerBoostTimer > 0;
         const frozen = powerFreezeTimer > 0;
 
+        // Range indicator when tower is selected (tap in PLANNING)
+        if (selectedTower === tower) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, tower.range * cellSize, 0, Math.PI * 2);
+          ctx.strokeStyle = tower.color + '66';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([4, 4]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = tower.color + '11';
+          ctx.fill();
+        }
+
         ctx.save();
         ctx.translate(cx, cy);
 
@@ -2780,6 +2797,11 @@
       // Boss warning effect timers
       if (bossWarningTimer > 0) bossWarningTimer -= dt;
       if (bossWarningFlash > 0) bossWarningFlash -= dt * 3;
+      // Tower range indicator auto-hide after 2s
+      if (towerRangeTimer > 0) {
+        towerRangeTimer -= dt;
+        if (towerRangeTimer <= 0) { selectedTower = null; }
+      }
 
       // Death particles update (always run, even when paused)
       updateDeathParticles(dt);
