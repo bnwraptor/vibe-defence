@@ -1732,6 +1732,7 @@
 
       drawGrid();
       drawPath();
+      drawPathFlow();
       drawTowers();
       drawEnemies();
       drawProjectiles();
@@ -1846,6 +1847,87 @@
         ctx.strokeStyle = borderColor;
         ctx.lineWidth = 2;
         ctx.strokeRect(tile.col * cellSize + 2, tile.row * cellSize + 2, cellSize - 4, cellSize - 4);
+      }
+    }
+
+    // Animated flow indicators: dashed trail + arrow markers along connected path
+    function drawPathFlow() {
+      if (pathTiles.length === 0 || !validatePath()) return;
+
+      const ordered = getOrderedPath();
+      if (ordered.length === 0) return;
+
+      const now = Date.now();
+      const t = (now / 800) % 1; // 0-1 flowing animation cycle
+
+      // Draw flowing dots along the path
+      for (let i = 0; i < ordered.length; i++) {
+        const tile = ordered[i];
+        const cx = (tile.col + 0.5) * cellSize;
+        const cy = (tile.row + 0.5) * cellSize;
+
+        // Direction arrow on each tile
+        let dx = 0, dy = 0;
+        if (i < ordered.length - 1) {
+          dx = ordered[i + 1].col - tile.col;
+          dy = ordered[i + 1].row - tile.row;
+        } else {
+          // Last tile: direction to BASE
+          dx = BASE_POS.col - tile.col;
+          dy = BASE_POS.row - tile.row;
+        }
+        const angle = Math.atan2(dy, dx);
+
+        // Pulsing dot flowing along the path
+        const dotPhase = (i / ordered.length + t) % 1;
+        const dotDist = dotPhase * ordered.length;
+        const dotIdx = Math.floor(dotDist);
+        if (dotIdx < ordered.length - 1) {
+          const t2 = dotDist - dotIdx;
+          const from = ordered[dotIdx];
+          const to = dotIdx < ordered.length - 1 ? ordered[dotIdx + 1] : { col: BASE_POS.col, row: BASE_POS.row };
+          const fx = from.col + (to.col - from.col) * t2 + 0.5;
+          const fy = from.row + (to.row - from.row) * t2 + 0.5;
+          const pulse = Math.sin(t * Math.PI * 2) * 0.3 + 0.7;
+          ctx.beginPath();
+          ctx.arc(fx * cellSize, fy * cellSize, cellSize * 0.1 * pulse, 0, Math.PI * 2);
+          ctx.fillStyle = '#4ade80';
+          ctx.shadowColor = '#4ade80';
+          ctx.shadowBlur = 6;
+          ctx.fill();
+          ctx.shadowBlur = 0;
+        }
+
+        // Small arrow marker on tile
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(angle);
+        ctx.fillStyle = 'rgba(74,222,128,0.5)';
+        ctx.beginPath();
+        ctx.moveTo(cellSize * 0.25, 0);
+        ctx.lineTo(-cellSize * 0.1, -cellSize * 0.12);
+        ctx.lineTo(-cellSize * 0.1, cellSize * 0.12);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Draw dashed flow line through center of path tiles
+      if (ordered.length >= 2) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(74,222,128,0.2)';
+        ctx.lineWidth = cellSize * 0.06;
+        ctx.setLineDash([cellSize * 0.15, cellSize * 0.15]);
+        ctx.lineDashOffset = -(now / 20) % (cellSize * 0.3);
+        ctx.beginPath();
+        ctx.moveTo((ordered[0].col + 0.5) * cellSize, (ordered[0].row + 0.5) * cellSize);
+        for (let i = 1; i < ordered.length; i++) {
+          ctx.lineTo((ordered[i].col + 0.5) * cellSize, (ordered[i].row + 0.5) * cellSize);
+        }
+        ctx.lineTo((BASE_POS.col + 0.5) * cellSize, (BASE_POS.row + 0.5) * cellSize);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
       }
     }
 
