@@ -1936,6 +1936,56 @@
       }
     }
 
+    // Static path flow: dashed line + arrows, no animation
+    function drawPathFlow() {
+      if (gameState !== GameStates.PLANNING) return;
+      if (pathTiles.length === 0 || !validatePath()) return;
+      const ordered = getOrderedPath();
+      if (ordered.length === 0) return;
+
+      // Direction arrows on each tile
+      for (let i = 0; i < ordered.length; i++) {
+        const tile = ordered[i];
+        const cx = (tile.col + 0.5) * cellSize;
+        const cy = (tile.row + 0.5) * cellSize;
+        let dx = 0, dy = 0;
+        if (i < ordered.length - 1) {
+          dx = ordered[i + 1].col - tile.col;
+          dy = ordered[i + 1].row - tile.row;
+        } else {
+          dx = BASE_POS.col - tile.col;
+          dy = BASE_POS.row - tile.row;
+        }
+        const angle = Math.atan2(dy, dx);
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(angle);
+        ctx.fillStyle = 'rgba(74,222,128,0.4)';
+        ctx.beginPath();
+        ctx.moveTo(cellSize * 0.2, 0);
+        ctx.lineTo(-cellSize * 0.1, -cellSize * 0.1);
+        ctx.lineTo(-cellSize * 0.1, cellSize * 0.1);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Static dashed line through path center
+      ctx.save();
+      ctx.strokeStyle = 'rgba(74,222,128,0.12)';
+      ctx.lineWidth = cellSize * 0.06;
+      ctx.setLineDash([cellSize * 0.2, cellSize * 0.2]);
+      ctx.beginPath();
+      ctx.moveTo((ordered[0].col + 0.5) * cellSize, (ordered[0].row + 0.5) * cellSize);
+      for (let i = 1; i < ordered.length; i++) {
+        ctx.lineTo((ordered[i].col + 0.5) * cellSize, (ordered[i].row + 0.5) * cellSize);
+      }
+      ctx.lineTo((BASE_POS.col + 0.5) * cellSize, (BASE_POS.row + 0.5) * cellSize);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
     // Draws a small tower preview on a named canvas element (for HOW TO PLAY screen)
     function drawTowerPreview(canvasId, type, color) {
       const c = document.getElementById(canvasId);
