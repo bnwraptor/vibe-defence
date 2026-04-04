@@ -1852,6 +1852,7 @@
 
     // Animated flow indicators: dashed trail + arrow markers along connected path
     function drawPathFlow() {
+      if (gameState !== GameStates.PLANNING) return;  // hide once wave starts
       if (pathTiles.length === 0 || !validatePath()) return;
 
       const ordered = getOrderedPath();
