@@ -388,6 +388,10 @@
     let screenShake = { x: 0, y: 0, duration: 0 };
     let tooltipTimer = 0;
 
+    // Boss warning effect state
+    let bossWarningTimer = 0;
+    let bossWarningFlash = 0;
+
     // Power-up state
     let powerFreezeTimer = 0;
     let powerBoostTimer = 0;
@@ -699,6 +703,13 @@
         bossRotation: 0
       });
       playSpawnSound();
+      if (type === 'BOSS') {
+        bossWarningTimer = 1.5;
+        bossWarningFlash = 1.0;
+        screenShake.duration = 0.3;
+        playTone(80, 0.5, 'sawtooth', 0.3);
+        playTone(60, 0.8, 'sawtooth', 0.2);
+      }
     }
 
     function updateEnemies(dt) {
@@ -1616,6 +1627,32 @@
       }
 
       // Power-up visual effects
+      // Power-up visual effects
+      if (bossWarningFlash > 0) {
+        // Red edge vignette
+        const gradient = ctx.createRadialGradient(
+          canvas.width/2, canvas.height/2, canvas.width * 0.3,
+          canvas.width/2, canvas.height/2, canvas.width * 0.8
+        );
+        gradient.addColorStop(0, 'rgba(0,0,0,0)');
+        gradient.addColorStop(1, `rgba(180,0,0,${bossWarningFlash * 0.6})`);
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Warning text
+        if (bossWarningTimer > 0.5) {
+          ctx.save();
+          ctx.font = `bold ${cellSize * 2}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = '#ff0000';
+          ctx.shadowColor = '#ff0000';
+          ctx.shadowBlur = 20;
+          ctx.fillText('⚠ BOSS INCOMING ⚠', canvas.width/2, canvas.height/2);
+          ctx.restore();
+        }
+      }
+
       if (powerFreezeTimer > 0) {
         ctx.fillStyle = 'rgba(68,136,255,0.12)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -2453,6 +2490,10 @@
       if (screenShake.duration > 0) {
         screenShake.duration -= dt;
       }
+
+      // Boss warning effect timers
+      if (bossWarningTimer > 0) bossWarningTimer -= dt;
+      if (bossWarningFlash > 0) bossWarningFlash -= dt * 3;
 
       // Death particles update (always run, even when paused)
       updateDeathParticles(dt);
