@@ -1858,7 +1858,7 @@
       if (ordered.length === 0) return;
 
       const now = Date.now();
-      const t = (now / 800) % 1; // 0-1 flowing animation cycle
+      const t = (now / 2000) % 1; // 0-1 flowing animation cycle
 
       // Draw flowing dots along the path
       for (let i = 0; i < ordered.length; i++) {
@@ -1918,7 +1918,7 @@
         ctx.strokeStyle = 'rgba(74,222,128,0.2)';
         ctx.lineWidth = cellSize * 0.06;
         ctx.setLineDash([cellSize * 0.15, cellSize * 0.15]);
-        ctx.lineDashOffset = -(now / 20) % (cellSize * 0.3);
+        ctx.lineDashOffset = -(now / 100) % (cellSize * 0.3);
         ctx.beginPath();
         ctx.moveTo((ordered[0].col + 0.5) * cellSize, (ordered[0].row + 0.5) * cellSize);
         for (let i = 1; i < ordered.length; i++) {
