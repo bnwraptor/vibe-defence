@@ -1722,7 +1722,11 @@
         }
       }
 
-      // Power-up visual effects
+      // Wave preview overlay
+      if (gameState === GameStates.WAVE_ACTIVE && previewTimer > 0) {
+        drawWavePreview();
+      }
+
       // Power-up visual effects
       if (bossWarningFlash > 0) {
         // Red edge vignette
@@ -2559,6 +2563,79 @@
       ctx.shadowBlur = 0;
       ctx.fillStyle = '#0a0a0f';
       ctx.fillText('B', baseCx, baseCy);
+    }
+
+    function getWavePreviewLines() {
+      if (currentWave <= BASE_WAVES) {
+        const def = WAVE_DEFINITIONS[currentWave - 1];
+        const counts = {};
+        for (const g of def) {
+          counts[g.type] = (counts[g.type] || 0) + g.count;
+        }
+        return Object.entries(counts).map(([type, count]) => {
+          const label = type.charAt(0) + type.slice(1).toLowerCase();
+          const color = ENEMY_TYPES[type].color;
+          return { text: `${count} ${label}`, color };
+        });
+      } else {
+        return [{ text: 'ENDLESS — SURVIVE!', color: '#aa44ff' }];
+      }
+    }
+
+    function drawWavePreview() {
+      // Dark overlay
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const lines = getWavePreviewLines();
+      const centerX = canvas.width / 2;
+      const waveY = canvas.height / 2 - (lines.length + 1) * cellSize * 1.4;
+
+      // Wave label — large, centered
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `bold ${cellSize * 2}px -apple-system, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = '#4ade80';
+      ctx.shadowBlur = 20;
+      const waveLabel = currentWave <= BASE_WAVES ? `WAVE ${currentWave}` : `WAVE ${currentWave} ∞`;
+      ctx.fillText(waveLabel, centerX, waveY);
+      ctx.shadowBlur = 0;
+
+      // Enemy count lines
+      ctx.font = `bold ${cellSize * 0.9}px -apple-system, sans-serif`;
+      lines.forEach((line, i) => {
+        const y = waveY + (i + 1) * cellSize * 1.4;
+        const textWidth = ctx.measureText(line.text).width;
+
+        // Color dot indicator
+        ctx.fillStyle = line.color;
+        ctx.shadowColor = line.color;
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(centerX - textWidth / 2 - cellSize * 0.5, y, cellSize * 0.25, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Enemy label
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(line.text, centerX, y);
+      });
+
+      // Countdown progress bar
+      const barWidth = canvas.width * 0.5;
+      const barHeight = 6;
+      const barX = (canvas.width - barWidth) / 2;
+      const barY = canvas.height / 2 + (lines.length + 1.5) * cellSize * 1.4;
+      const progress = previewTimer / WAVE_PREVIEW_DURATION;
+
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.fillRect(barX, barY, barWidth, barHeight);
+      ctx.fillStyle = '#4ade80';
+      ctx.shadowColor = '#4ade80';
+      ctx.shadowBlur = 8;
+      ctx.fillRect(barX, barY, barWidth * progress, barHeight);
+      ctx.shadowBlur = 0;
     }
 
     // === GAME LOOP ===
