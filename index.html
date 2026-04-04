@@ -335,6 +335,7 @@
     const POWER_NUKE_COST = 35;
     const POWER_NUKE_DAMAGE = 50;
     const POWER_BOOST_COST = 25;
+    const REROUTE_COST = 5;
     const POWER_BOOST_DUR = 5;
     const SPAWN_INTERVAL = 0.8;
     const WAVE_DELAY = 3;
@@ -391,6 +392,10 @@
     // Boss warning effect state
     let bossWarningTimer = 0;
     let bossWarningFlash = 0;
+
+    // High score state (persisted via localStorage)
+    let bestWave = 0;
+    let bestScore = 0;
 
     // Power-up state
     let powerFreezeTimer = 0;
@@ -453,7 +458,7 @@
     }
 
     // === PATH ===
-    function placePathTile(col, row) {
+    function placePathTile(col, row, duringWave = false) {
       if (tileBudget <= 0) {
         showTooltip('No path budget!');
         return false;
@@ -465,6 +470,14 @@
       if (isPathTile(col, row)) {
         return false;
       }
+      if (duringWave) {
+        if (currency < REROUTE_COST) {
+          showTooltip('Need 5💰 to reroute!');
+          return false;
+        }
+        currency -= REROUTE_COST;
+        showTooltip('REROUTE 5💰');
+      }
       pathTiles.push({ col, row });
       tileBudget--;
       grid[row][col] = CELL_TYPES.PATH;
@@ -475,9 +488,12 @@
       return true;
     }
 
-    function removePathTile(col, row) {
+    function removePathTile(col, row, duringWave = false) {
       const idx = pathTiles.findIndex(t => t.col === col && t.row === row);
       if (idx === -1) return false;
+      if (duringWave) {
+        currency += REROUTE_COST;
+      }
       pathTiles.splice(idx, 1);
       tileBudget++;
       grid[row][col] = CELL_TYPES.EMPTY;
@@ -765,6 +781,17 @@
             if (baseHP <= 0) {
               baseHP = 0;
               gameState = GameStates.GAME_OVER;
+              // Save records before showing overlay
+              const finalScore = currency + (currentWave - 1) * 100;
+              const wavesDone = currentWave - 1;
+              if (wavesDone > bestWave) {
+                bestWave = wavesDone;
+                localStorage.setItem('vibe-bestWave', bestWave.toString());
+              }
+              if (finalScore > bestScore) {
+                bestScore = finalScore;
+                localStorage.setItem('vibe-bestScore', bestScore.toString());
+              }
               showOverlay('GAME_OVER');
             }
             continue;
@@ -1092,7 +1119,7 @@
 
     function handlePointerDown(e) {
       console.log('[pointerdown] type:', e.pointerType, 'x:', e.clientX, 'y:', e.clientY, 'gameState:', gameState);
-      if (gameState !== GameStates.PLANNING) { console.log('[pointerdown] REJECTED: wrong state'); return; }
+      if (gameState !== GameStates.PLANNING && gameState !== GameStates.WAVE_ACTIVE) { console.log('[pointerdown] REJECTED: wrong state'); return; }
       e.preventDefault();
 
       // Reject if this is a mouse event emulated after touch (iOS Safari fix)
@@ -1115,7 +1142,7 @@
         if (pointerDown && pointerStart && pointerStart.col === cell.col && pointerStart.row === cell.row) {
           if (isPathTile(cell.col, cell.row)) {
             console.log('[longpress] removing tile');
-            removePathTile(cell.col, cell.row);
+            removePathTile(cell.col, cell.row, inWave);
             pointerDown = false;
             pointerStart = null;
           }
@@ -1124,7 +1151,7 @@
     }
 
     function handlePointerMove(e) {
-      if (!pointerDown || gameState !== GameStates.PLANNING) return;
+      if (!pointerDown || (gameState !== GameStates.PLANNING && gameState !== GameStates.WAVE_ACTIVE)) return;
       // Only handle the active pointer id (ignores other fingers)
       if (e.pointerType === 'touch' && e.pointerId !== activeTouchId) return;
       e.preventDefault();
@@ -1135,7 +1162,7 @@
       if (pointerLastCell && (cell.col !== pointerLastCell.col || cell.row !== pointerLastCell.row)) {
         console.log('[pointermove] drawing from', pointerLastCell, 'to', cell);
         if (isCellEmpty(cell.col, cell.row) && !isPathTile(cell.col, cell.row)) {
-          placePathTile(cell.col, cell.row);
+          placePathTile(cell.col, cell.row, true); // duringWave = true for drag
         }
         pointerLastCell = cell;
       }
@@ -1144,6 +1171,8 @@
     function handlePointerUp(e) {
       console.log('[pointerup] pointerDown was:', pointerDown);
       if (!pointerDown) { console.log('[pointerup] REJECTED: not down'); return; }
+      // Allow pointer up during WAVE_ACTIVE for rerouting
+      const inWave = gameState === GameStates.WAVE_ACTIVE;
       e.preventDefault();
       clearTimeout(longPressTimer);
 
@@ -1167,10 +1196,10 @@
 
         if (isPathTile(cell.col, cell.row)) {
           console.log('[pointerup] removing path tile');
-          removePathTile(cell.col, cell.row);
+          removePathTile(cell.col, cell.row, inWave);
         } else if (getCellAt(cell.col, cell.row) === CELL_TYPES.EMPTY) {
           console.log('[pointerup] placing path tile');
-          placePathTile(cell.col, cell.row);
+          placePathTile(cell.col, cell.row, inWave);
         } else if (getCellAt(cell.col, cell.row) === CELL_TYPES.TOWER) {
           const tower = getTowerAt(cell.col, cell.row);
           console.log(`Tower: ${tower.type}, Range: ${tower.range}, Damage: ${tower.damage}, Fire Rate: ${tower.fireRate}s`);
@@ -1197,6 +1226,10 @@
 
     function isCellEmpty(col, row) {
       return getCellAt(col, row) === CELL_TYPES.EMPTY;
+    }
+
+    function isRerouting() {
+      return gameState === GameStates.WAVE_ACTIVE;
     }
 
     function setupInput() {
@@ -1249,6 +1282,24 @@
         budgetText.textContent = budgetStr;
         lastBudgetText = budgetStr;
         budgetFill.style.width = `${(pathTiles.length / Math.max(tileBudget, 1)) * 100}%`;
+      }
+
+      updateClearButton();
+    }
+
+    function updateClearButton() {
+      const btn = document.getElementById('clear-btn');
+      if (!btn) return;
+      if (gameState === GameStates.WAVE_ACTIVE) {
+        btn.textContent = 'REROUTE';
+        btn.style.color = '#ffd700';
+        btn.style.border = '1px solid #ffd700';
+        btn.disabled = false;
+      } else {
+        btn.textContent = 'CLEAR';
+        btn.style.color = '#aaa';
+        btn.style.border = 'none';
+        btn.disabled = false;
       }
     }
 
@@ -1417,6 +1468,21 @@
       pathTiles = [];
       updateHUD();
       if (gameState === GameStates.PLANNING) setStartButton(false);
+      playRemoveSound();
+    }
+
+    function clearPathReroute() {
+      // Clear all path tiles during WAVE_ACTIVE, refunding each at REROUTE_COST
+      const count = pathTiles.length;
+      if (count === 0) return;
+      currency += count * REROUTE_COST;
+      showTooltip(`REROUTE ${count * REROUTE_COST}💰 refund!`);
+      for (const tile of pathTiles) {
+        grid[tile.row][tile.col] = CELL_TYPES.EMPTY;
+        tileBudget++;
+      }
+      pathTiles = [];
+      updateHUD();
       playRemoveSound();
     }
 
@@ -2511,6 +2577,10 @@
 
     // === INIT ===
     function init() {
+      // Load high scores from localStorage
+      bestWave = parseInt(localStorage.getItem('vibe-bestWave') || '0');
+      bestScore = parseInt(localStorage.getItem('vibe-bestScore') || '0');
+
       resizeCanvas();
       initGrid();
       initTowers();
@@ -2527,7 +2597,9 @@
       });
 
       document.getElementById('clear-btn').addEventListener('click', () => {
-        if (gameState === GameStates.PLANNING || gameState === GameStates.MENU) {
+        if (gameState === GameStates.WAVE_ACTIVE) {
+          clearPathReroute();
+        } else if (gameState === GameStates.PLANNING || gameState === GameStates.MENU) {
           clearPath();
         }
       });
