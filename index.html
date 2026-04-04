@@ -151,6 +151,19 @@
       justify-content: center;
       flex-shrink: 0;
     }
+    #mute-btn {
+      background: rgba(255,255,255,0.1);
+      border: none;
+      color: #fff;
+      font-size: 14px;
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
     #overlay {
       position: fixed;
       inset: 0;
@@ -237,6 +250,7 @@
 <body>
   <div id="game-container">
     <div id="hud-top">
+      <button id="mute-btn">🔊</button>
       <span class="wave-display" id="wave-text">WAVE 1/10</span>
       <span class="hp-display" id="hp-text">HP: ██████░░░░</span>
       <span class="currency-display" id="currency-text">💰 100</span>
@@ -484,6 +498,7 @@
       tileBudget--;
       grid[row][col] = CELL_TYPES.PATH;
       playPlaceSound();
+      if (duringWave) vibrate();
       flashTile(col, row, '#4a4a6a', 100);
       updateHUD();
       if (gameState === GameStates.PLANNING) setStartButton(true);
@@ -827,6 +842,7 @@
       enemy.deathTimer = 0;
       currency += enemy.reward;
       playDeathSound();
+      vibrate();
       updateHUD();
       // Spawn death particles at enemy position
       const cx = (enemy.col + 0.5) * cellSize;
@@ -1078,6 +1094,12 @@
 
     // === AUDIO ===
     let audioCtx = null;
+    let muted = localStorage.getItem('vibe-muted') === '1';
+
+    function vibrate(ms = 50) {
+      if (navigator.vibrate) navigator.vibrate(ms);
+    }
+
     function getAudioCtx() {
       if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1085,6 +1107,7 @@
       return audioCtx;
     }
     function playTone(freq, duration, type = 'square', vol = 0.1) {
+      if (muted) return;
       try {
         const ctx = getAudioCtx();
         const osc = ctx.createOscillator();
@@ -1332,6 +1355,11 @@
       }
     }
 
+    function updateMuteButton() {
+      const btn = document.getElementById('mute-btn');
+      if (btn) btn.textContent = muted ? '🔇' : '🔊';
+    }
+
     let tooltipTimeout = null;
     function showTooltip(msg) {
       tooltip.textContent = msg;
@@ -1458,21 +1486,19 @@
         `;
         document.getElementById('overlay-restart-btn').addEventListener('click', restartGame);
       } else if (type === 'PAUSED') {
-        console.log('[SHOWOVERLAY] Building PAUSED overlay, current innerHTML:', overlay.innerHTML.substring(0, 50));
+        const hpPct = Math.round(baseHP / BASE_HP * 100);
         overlay.innerHTML = `
           <h1>PAUSED</h1>
+          <div style="color:#aaa;text-align:center;font-size:16px;line-height:2">
+            <div>Wave ${currentWave}/${BASE_WAVES}</div>
+            <div>HP: ${'█'.repeat(Math.round(hpPct/10))}${'░'.repeat(10-Math.round(hpPct/10))} ${baseHP}/${BASE_HP}</div>
+            <div>Currency: 💰 ${currency}</div>
+          </div>
           <button class="big-btn" id="overlay-resume-btn">RESUME</button>
+          <button class="secondary-btn" id="overlay-restart-btn" style="margin-top:8px;border-color:#ff4444;color:#ff4444">RESTART</button>
         `;
-        console.log('[SHOWOVERLAY] After setting innerHTML, overlay.classList:', overlay.className);
-        const resumeBtn = document.getElementById('overlay-resume-btn');
-        console.log('[SHOWOVERLAY] resumeBtn found:', resumeBtn);
-        if (resumeBtn) {
-          // Use onclick directly to ensure it fires
-          resumeBtn.onclick = resumeGame;
-          console.log('[SHOWOVERLAY] resume onclick set to resumeGame');
-        } else {
-          console.error('[SHOWOVERLAY] ERROR: resumeBtn is null!');
-        }
+        document.getElementById('overlay-resume-btn').addEventListener('click', resumeGame);
+        document.getElementById('overlay-restart-btn').addEventListener('click', restartGame);
       }
     }
 
@@ -1554,6 +1580,7 @@
       updateHUD();
       updateBuyHpButton();
       playPlaceSound();
+      vibrate();
     }
 
     function updateBuyHpButton() {
@@ -1580,6 +1607,7 @@
       updateHUD();
       updatePowerButtons();
       playTone(200, 0.3, 'sine', 0.15);
+      vibrate();
     }
 
     function activateNuke() {
@@ -1600,6 +1628,7 @@
       updateHUD();
       updatePowerButtons();
       playTone(100, 0.5, 'sawtooth', 0.2);
+      vibrate();
     }
 
     function activateBoost() {
@@ -1615,6 +1644,7 @@
       updateHUD();
       updatePowerButtons();
       playTone(880, 0.2, 'sine', 0.1);
+      vibrate();
     }
 
     function updatePowerButtons() {
@@ -2697,8 +2727,11 @@
 
       setupInput();
 
+      updateMuteButton();
+
       startBtn.addEventListener('click', () => {
         if (gameState === GameStates.PLANNING) {
+          vibrate();
           startWave();
         }
       });
@@ -2721,6 +2754,12 @@
       document.getElementById('nuke-btn').addEventListener('touchend', (e) => { e.preventDefault(); activateNuke(); });
       document.getElementById('boost-btn').addEventListener('click', activateBoost);
       document.getElementById('boost-btn').addEventListener('touchend', (e) => { e.preventDefault(); activateBoost(); });
+
+      document.getElementById('mute-btn').addEventListener('click', () => {
+        muted = !muted;
+        localStorage.setItem('vibe-muted', muted ? '1' : '0');
+        updateMuteButton();
+      });
 
       pauseBtn.addEventListener('click', () => {
         console.log('[PAUSE] click event fired! current state:', gameState);
