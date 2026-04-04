@@ -301,6 +301,30 @@
     const MAX_TILE_BUDGET = 110;
     const BASE_HP = 100;
     const STARTING_CURRENCY = 100;
+    const DIFFICULTY = {
+      EASY: {
+        enemyHpScale: 0.8,
+        enemySpeedScale: 0.9,
+        startHp: 120,
+        startCurrency: 150,
+        spawnIntervalMult: 1.3,
+      },
+      NORMAL: {
+        enemyHpScale: 1.0,
+        enemySpeedScale: 1.0,
+        startHp: 100,
+        startCurrency: 100,
+        spawnIntervalMult: 1.0,
+      },
+      HARD: {
+        enemyHpScale: 1.2,
+        enemySpeedScale: 1.15,
+        startHp: 80,
+        startCurrency: 80,
+        spawnIntervalMult: 0.85,
+      }
+    };
+    let currentDifficulty = DIFFICULTY.NORMAL;
     const WAVE_BONUS = 20;
     const BASE_WAVES = 10;
     const ENDLESS_START = 11;
@@ -649,8 +673,8 @@
     // === ENEMIES ===
     function spawnEnemy(type) {
       const typeData = ENEMY_TYPES[type];
-      const hpScale = 1 + (currentWave - 1) * 0.15;
-      const speed = typeData.speed * waveSpeedMult;
+      const hpScale = (1 + (currentWave - 1) * 0.15) * currentDifficulty.enemyHpScale;
+      const speed = typeData.speed * waveSpeedMult * currentDifficulty.enemySpeedScale;
       enemies.push({
         type,
         col: SPAWN_POS.col,
@@ -963,8 +987,9 @@
       if (gameState !== GameStates.WAVE_ACTIVE) return;
 
       if (powerFreezeTimer <= 0) {
+        const effectiveInterval = SPAWN_INTERVAL * currentDifficulty.spawnIntervalMult;
         spawnTimer += dt;
-        if (spawnTimer >= SPAWN_INTERVAL && waveEnemyQueue.length > 0) {
+        if (spawnTimer >= effectiveInterval && waveEnemyQueue.length > 0) {
           spawnTimer = 0;
           spawnEnemy(waveEnemyQueue.shift());
         }
@@ -1247,6 +1272,12 @@
         overlay.innerHTML = `
           <h1>Vibe Defence</h1>
           <h2>Path Architect</h2>
+          <p style="color:#888;font-size:13px;margin-bottom:16px;text-align:center">Select Difficulty</p>
+          <div style="display:flex;gap:10px;margin-bottom:16px">
+            <button id="diff-easy" style="flex:1;padding:10px;border-radius:8px;border:2px solid #333;background:#1a1a2e;color:#44ff44;font-weight:bold;cursor:pointer;font-size:13px">EASY</button>
+            <button id="diff-normal" style="flex:1;padding:10px;border-radius:8px;border:2px solid #4ade80;background:#2d4a2d;color:#4ade80;font-weight:bold;cursor:pointer;font-size:13px">NORMAL</button>
+            <button id="diff-hard" style="flex:1;padding:10px;border-radius:8px;border:2px solid #ff4444;background:#2e1a1a;color:#ff4444;font-weight:bold;cursor:pointer;font-size:13px">HARD</button>
+          </div>
           <p style="color:#666;max-width:320px;text-align:center;font-size:14px;line-height:1.6">
             Draw the path enemies must follow.<br>
             Your towers will defend the base.
@@ -1254,6 +1285,23 @@
           <button class="big-btn" id="overlay-start-btn">START GAME</button>
           <button class="secondary-btn" id="overlay-how-btn">HOW TO PLAY</button>
         `;
+        document.getElementById('diff-easy').addEventListener('click', () => {
+          currentDifficulty = DIFFICULTY.EASY;
+          document.querySelectorAll('[id^=diff-]').forEach(b => b.style.border = '#333');
+          document.getElementById('diff-easy').style.border = '#4ade80';
+        });
+        document.getElementById('diff-normal').addEventListener('click', () => {
+          currentDifficulty = DIFFICULTY.NORMAL;
+          document.querySelectorAll('[id^=diff-]').forEach(b => b.style.border = '#333');
+          document.getElementById('diff-normal').style.border = '#4ade80';
+        });
+        document.getElementById('diff-hard').addEventListener('click', () => {
+          currentDifficulty = DIFFICULTY.HARD;
+          document.querySelectorAll('[id^=diff-]').forEach(b => b.style.border = '#333');
+          document.getElementById('diff-hard').style.border = '#4ade80';
+        });
+        // Default: NORMAL selected
+        document.getElementById('diff-normal').style.border = '#4ade80';
         document.getElementById('overlay-start-btn').addEventListener('click', startGame);
         document.getElementById('overlay-how-btn').addEventListener('click', () => showOverlay('HOW_TO_PLAY'));
       } else if (type === 'HOW_TO_PLAY') {
@@ -1489,8 +1537,8 @@
 
     function restartGame() {
       clearPath();
-      currency = STARTING_CURRENCY;
-      baseHP = BASE_HP;
+      currency = currentDifficulty.startCurrency;
+      baseHP = currentDifficulty.startHp;
       currentWave = 1;
       waveSpeedMult = 1.0;
       enemies = [];
