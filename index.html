@@ -388,6 +388,8 @@
     let selectedTower = null;
     let screenShake = { x: 0, y: 0, duration: 0 };
     let tooltipTimer = 0;
+    let previewTimer = 0;
+    const WAVE_PREVIEW_DURATION = 2.0;
 
     // Boss warning effect state
     let bossWarningTimer = 0;
@@ -740,6 +742,9 @@
           continue;
         }
 
+        // Skip movement during wave preview
+        if (previewTimer > 0) continue;
+
         if (enemy.slowTimer > 0) {
           enemy.slowTimer -= dt;
         }
@@ -1016,6 +1021,7 @@
       powerBoostTimer = 0;
       buildWaveQueue();
       spawnTimer = 0;
+      previewTimer = WAVE_PREVIEW_DURATION;
       gameState = GameStates.WAVE_ACTIVE;
       setStartButton(false);
       updatePowerButtons();
@@ -1023,6 +1029,17 @@
 
     function updateWave(dt) {
       if (gameState !== GameStates.WAVE_ACTIVE) return;
+
+      // Wave preview — skip spawning for the first 2 seconds
+      if (previewTimer > 0) {
+        previewTimer -= dt;
+        // Keep power-up timers ticking during preview
+        if (powerFreezeTimer > 0) powerFreezeTimer -= dt;
+        if (powerBoostTimer > 0) powerBoostTimer -= dt;
+        if (powerFlashTimer > 0) powerFlashTimer -= dt;
+        updatePowerButtons();
+        return;
+      }
 
       if (powerFreezeTimer <= 0) {
         const effectiveInterval = SPAWN_INTERVAL * currentDifficulty.spawnIntervalMult;
@@ -1411,19 +1428,32 @@
 
         document.getElementById('overlay-back-btn').addEventListener('click', () => showOverlay('MENU'));
       } else if (type === 'GAME_OVER') {
+        const finalScore = currency + (currentWave - 1) * 100;
+        const wavesDone = currentWave - 1;
+        const isWaveRecord = wavesDone > bestWave;
+        const isScoreRecord = finalScore > bestScore;
         overlay.innerHTML = `
-          <h1 style="color:#ff4444">Game Over</h1>
-          <p class="score-line">Waves Survived: ${currentWave - 1}</p>
-          <p class="score-line">Final Score: ${currency + (currentWave - 1) * 100}</p>
+          <h1 style="color:#ff4444">GAME OVER</h1>
+          ${isWaveRecord || isScoreRecord ? '<p style="color:#ffd700;font-size:18px;margin:8px 0">NEW RECORD!</p>' : ''}
+          <p class="score-line">Waves Survived: ${wavesDone}</p>
+          <p class="score-line">Best Wave: ${Math.max(wavesDone, bestWave)}</p>
+          <p class="score-line">Final Score: ${finalScore}</p>
+          <p class="score-line">Best Score: ${Math.max(finalScore, bestScore)}</p>
           <button class="big-btn" id="overlay-restart-btn">RESTART</button>
         `;
         document.getElementById('overlay-restart-btn').addEventListener('click', restartGame);
       } else if (type === 'VICTORY') {
         playWaveCompleteSound();
+        const finalScore = currency + BASE_WAVES * 100;
+        const isWaveRecord = BASE_WAVES > bestWave;
+        const isScoreRecord = finalScore > bestScore;
         overlay.innerHTML = `
           <h1 style="background:linear-gradient(135deg, #ffd700, #ff8800);-webkit-background-clip:text;-webkit-text-fill-color:transparent">YOU WIN!</h1>
-          <p class="score-line">All 10 Waves Cleared!</p>
-          <p class="score-line">Final Score: ${currency + MAX_WAVES * 100}</p>
+          ${isWaveRecord || isScoreRecord ? '<p style="color:#ffd700;font-size:18px;margin:8px 0">NEW RECORD!</p>' : ''}
+          <p class="score-line">All ${BASE_WAVES} Waves Cleared!</p>
+          <p class="score-line">Best Wave: ${Math.max(BASE_WAVES, bestWave)}</p>
+          <p class="score-line">Final Score: ${finalScore}</p>
+          <p class="score-line">Best Score: ${Math.max(finalScore, bestScore)}</p>
           <button class="big-btn" id="overlay-restart-btn">PLAY AGAIN</button>
         `;
         document.getElementById('overlay-restart-btn').addEventListener('click', restartGame);
