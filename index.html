@@ -1918,7 +1918,7 @@
         ctx.strokeStyle = 'rgba(74,222,128,0.2)';
         ctx.lineWidth = cellSize * 0.06;
         ctx.setLineDash([cellSize * 0.15, cellSize * 0.15]);
-        ctx.lineDashOffset = -(now / 500) % (cellSize * 0.3);
+        ctx.lineDashOffset = -(now / 3000) % (cellSize * 0.3);
         ctx.beginPath();
         ctx.moveTo((ordered[0].col + 0.5) * cellSize, (ordered[0].row + 0.5) * cellSize);
         for (let i = 1; i < ordered.length; i++) {
