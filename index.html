@@ -1244,6 +1244,10 @@
           selectedTower = tower;
           towerRangeTimer = 999;
           tower.upgradeFlash = 1.0;
+          const lvl = tower.level || 1;
+          const costs = [0, 30, 50];
+          const cost = costs[Math.floor(lvl)] || 50;
+          showTooltip('TOWER Lv' + lvl + ' COST ' + cost);
           updateUpgradeButton();
         }
 
@@ -2927,6 +2931,7 @@
       function updateUpgradeButton() {
         const upLabel = document.getElementById('upgrade-label');
         const upCost = document.getElementById('upgrade-cost');
+        showTooltip('updateUpgradeButton: sel=' + (selectedTower ? 'YES lvl=' + (selectedTower.level||1) : 'null'));
         if (!selectedTower) {
           upgradeBtn.style.opacity = '0.3';
           upgradeBtn.style.pointerEvents = 'none';
