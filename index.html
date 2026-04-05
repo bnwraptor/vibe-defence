@@ -2928,8 +2928,10 @@
       // Upgrade button setup
       const upgradeBtn = document.getElementById('upgrade-btn');
       function updateUpgradeButton() {
+        console.log('[updateUpgradeButton] selectedTower=', selectedTower ? 'Lv' + selectedTower.level : null, 'btn=', !!upgradeBtn, 'currency=', currency);
         const upLabel = document.getElementById('upgrade-label');
         const upCost = document.getElementById('upgrade-cost');
+        showTooltip('UPG Lv' + (selectedTower ? (selectedTower.level||1) : 'null'));
         // Remove all state classes
         upgradeBtn.classList.remove('hidden', 'active', 'cant-afford', 'maxed');
         if (!selectedTower) {
