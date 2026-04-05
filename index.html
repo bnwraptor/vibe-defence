@@ -874,25 +874,7 @@
         const dy = (target.row + 0.5) - proj.row;
         const dist = Math.hypot(dx, dy);
 
-        // Predictive aim: lead fast-moving targets
-        const projSpeedCells = (PROJ_SPEED * dt) / cellSize;
-        const timeToHit = dist / projSpeedCells;
-        // Enemy velocity (cells per second)
-        const evx = (target.col - (target.prevCol || target.col)) / dt;
-        const evy = (target.row - (target.prevRow || target.row)) / dt;
-        // Predict where enemy will be
-        const predictCol = target.col + evx * timeToHit;
-        const predictRow = target.row + evy * timeToHit;
-        const pdx = (predictCol + 0.5) - proj.col;
-        const pdy = (predictRow + 0.5) - proj.row;
-        const pdist = Math.hypot(pdx, pdy);
-
-        // Use predicted direction if it improves aim (avoid division issues on near-misses)
-        const aimDist = pdist > 0.01 ? pdist : dist;
-        const aimDx = pdist > 0.01 ? pdx : dx;
-        const aimDy = pdist > 0.01 ? pdy : dy;
-
-        if (aimDist < 0.35) {
+        if (dist < 0.3) {
           target.hp -= proj.damage;
           if (proj.slow > 0) {
             target.slowTimer = 1;
@@ -915,8 +897,9 @@
           }
           projectiles.splice(i, 1);
         } else {
-          proj.col += (aimDx / aimDist) * projSpeedCells;
-          proj.row += (aimDy / aimDist) * projSpeedCells;
+          const speed = (PROJ_SPEED * dt) / cellSize;
+          proj.col += (dx / dist) * speed;
+          proj.row += (dy / dist) * speed;
         }
       }
     }
