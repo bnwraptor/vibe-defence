@@ -2956,7 +2956,7 @@
       }
 
       upgradeBtn.addEventListener('click', () => {
-        if (!selectedTower) return;
+        if (gameState !== GameStates.PLANNING || !selectedTower) return;
         const tower = selectedTower;
         const lvl = tower.level || 1;
         if (lvl >= 3) return;
@@ -2974,6 +2974,7 @@
         updateHUD();
         updateUpgradeButton();
       });
+      upgradeBtn.addEventListener('touchend', (e) => { e.preventDefault(); upgradeBtn.click(); });
 
       document.getElementById('clear-btn').addEventListener('click', () => {
         if (gameState === GameStates.WAVE_ACTIVE) {
