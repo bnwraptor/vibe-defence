@@ -118,10 +118,13 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: opacity 0.2s;
-      opacity: 0.3;
-      pointer-events: none;
+      transition: opacity 0.2s, transform 0.1s;
     }
+    #upgrade-btn.hidden { opacity: 0.3; pointer-events: none; }
+    #upgrade-btn.active { opacity: 1; pointer-events: auto; }
+    #upgrade-btn.active:hover { transform: scale(1.1); }
+    #upgrade-btn.cant-afford { opacity: 0.5; pointer-events: auto; }
+    #upgrade-btn.maxed { opacity: 0.3; pointer-events: none; }
     #start-btn::before {
       content: '';
       width: 0; height: 0;
@@ -1244,10 +1247,6 @@
           selectedTower = tower;
           towerRangeTimer = 999;
           tower.upgradeFlash = 1.0;
-          const lvl = tower.level || 1;
-          const costs = [0, 30, 50];
-          const cost = costs[Math.floor(lvl)] || 50;
-          showTooltip('TOWER Lv' + lvl + ' COST ' + cost);
           updateUpgradeButton();
         }
 
@@ -2931,28 +2930,29 @@
       function updateUpgradeButton() {
         const upLabel = document.getElementById('upgrade-label');
         const upCost = document.getElementById('upgrade-cost');
-        showTooltip('updateUpgradeButton: sel=' + (selectedTower ? 'YES lvl=' + (selectedTower.level||1) : 'null'));
+        // Remove all state classes
+        upgradeBtn.classList.remove('hidden', 'active', 'cant-afford', 'maxed');
         if (!selectedTower) {
-          upgradeBtn.style.opacity = '0.3';
-          upgradeBtn.style.pointerEvents = 'none';
+          upgradeBtn.classList.add('hidden');
           if (upLabel) upLabel.textContent = '↑';
           if (upCost) upCost.textContent = '—';
           return;
         }
         const lvl = Math.max(1, Math.min(selectedTower.level || 1, 3));
         if (lvl >= 3) {
-          upgradeBtn.style.opacity = '0.3';
-          upgradeBtn.style.pointerEvents = 'none';
+          upgradeBtn.classList.add('maxed');
           if (upLabel) upLabel.textContent = '★';
           if (upCost) upCost.textContent = 'MAX';
         } else {
           const costs = [0, 30, 50];
           const cost = costs[Math.floor(lvl)] || 50;
-          const canAfford = currency >= cost;
-          upgradeBtn.style.opacity = canAfford ? '1' : '0.5';
-          upgradeBtn.style.pointerEvents = 'auto';
+          if (currency >= cost) {
+            upgradeBtn.classList.add('active');
+          } else {
+            upgradeBtn.classList.add('cant-afford');
+          }
           if (upLabel) upLabel.textContent = '\u2191';
-          if (upCost) upCost.textContent = cost + '\u202f\u26a1';
+          if (upCost) upCost.textContent = cost + '\u26a1';
         }
       }
 
