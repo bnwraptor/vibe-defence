@@ -1588,7 +1588,7 @@
     }
 
     function buyHP() {
-      if (gameState !== GameStates.PLANNING) return;
+      if (gameState !== GameStates.PLANNING) { showTooltip('NOT PLANNING state'); return; }
       if (currency < HP_COST) {
         showTooltip('Not enough currency!');
         return;
@@ -1876,7 +1876,7 @@
 
     // Animated flow indicators: dashed trail + arrow markers along connected path
     function drawPathFlow() {
-      if (gameState !== GameStates.PLANNING) return;  // hide once wave starts
+      if (gameState !== GameStates.PLANNING) { showTooltip('NOT PLANNING state'); return; }  // hide once wave starts
       if (pathTiles.length === 0 || !validatePath()) return;
 
       const ordered = getOrderedPath();
@@ -1958,7 +1958,7 @@
 
     // Static path flow: dashed line + arrows, no animation
     function drawPathFlow() {
-      if (gameState !== GameStates.PLANNING) return;
+      if (gameState !== GameStates.PLANNING) { showTooltip('NOT PLANNING state'); return; }
       if (pathTiles.length === 0 || !validatePath()) return;
       const ordered = getOrderedPath();
       if (ordered.length === 0) return;
@@ -2956,14 +2956,15 @@
       }
 
       upgradeBtn.addEventListener('click', () => {
-        if (gameState !== GameStates.PLANNING) return;
+        if (gameState !== GameStates.PLANNING) { showTooltip('NOT PLANNING state'); return; }
         if (!selectedTower) return;
         const tower = selectedTower;
+        if (!tower) { showTooltip('NO TOWER'); }
         const lvl = tower.level || 1;
-        if (lvl >= 3) return;
+        if (lvl >= 3) { showTooltip('MAX LEVEL'); return; }
         const costs = [0, 30, 50];
         const cost = costs[lvl];
-        if (currency < cost) return;
+        if (currency < cost) { showTooltip('NEED ' + cost + ' have ' + currency); return; }
         currency -= cost;
         tower.level = lvl + 1;
         tower.damage = Math.round(TOWER_TYPES[tower.type].damage * Math.pow(1.4, tower.level - 1));
@@ -2976,7 +2977,7 @@
         updateUpgradeButton();
       });
         const cost = costs[lvl];
-        if (currency < cost) return;
+        if (currency < cost) { showTooltip('NEED ' + cost + ' have ' + currency); return; }
         currency -= cost;
         tower.level = lvl + 1;
         tower.damage = Math.round(TOWER_TYPES[tower.type].damage * Math.pow(1.4, tower.level - 1));
