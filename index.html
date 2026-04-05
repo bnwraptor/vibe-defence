@@ -120,11 +120,6 @@
       justify-content: center;
       transition: opacity 0.2s, transform 0.1s;
     }
-    #upgrade-btn.hidden { opacity: 0.3; pointer-events: none; }
-    #upgrade-btn.active { opacity: 1; pointer-events: auto; }
-    #upgrade-btn.active:hover { transform: scale(1.1); }
-    #upgrade-btn.cant-afford { opacity: 0.5; pointer-events: auto; }
-    #upgrade-btn.maxed { opacity: 0.3; pointer-events: none; }
     #start-btn::before {
       content: '';
       width: 0; height: 0;
@@ -2925,46 +2920,52 @@
         }
       });
 
-      // Upgrade button setup
-      const upgradeBtn = document.getElementById('upgrade-btn');
+      // Upgrade button — simple direct DOM manipulation
       function updateUpgradeButton() {
-        console.log('[updateUpgradeButton] selectedTower=', selectedTower ? 'Lv' + selectedTower.level : null, 'btn=', !!upgradeBtn, 'currency=', currency);
-        const upLabel = document.getElementById('upgrade-label');
-        const upCost = document.getElementById('upgrade-cost');
-        showTooltip('UPG Lv' + (selectedTower ? (selectedTower.level||1) : 'null'));
-        // Remove all state classes
-        upgradeBtn.classList.remove('hidden', 'active', 'cant-afford', 'maxed');
+        const btn = document.getElementById('upgrade-btn');
+        const lbl = document.getElementById('upgrade-label');
+        const costSpan = document.getElementById('upgrade-cost');
+        if (!btn || !lbl || !costSpan) return;
+
         if (!selectedTower) {
-          upgradeBtn.classList.add('hidden');
-          if (upLabel) upLabel.textContent = '↑';
-          if (upCost) upCost.textContent = '—';
+          btn.style.opacity = '0.3';
+          btn.style.pointerEvents = 'none';
+          lbl.textContent = '?';
+          costSpan.textContent = '—';
           return;
         }
-        const lvl = Math.max(1, Math.min(selectedTower.level || 1, 3));
+
+        const lvl = selectedTower.level || 1;
+        const nextLvl = lvl + 1;
         if (lvl >= 3) {
-          upgradeBtn.classList.add('maxed');
-          if (upLabel) upLabel.textContent = '★';
-          if (upCost) upCost.textContent = 'MAX';
-        } else {
-          const costs = [0, 30, 50];
-          const cost = costs[Math.floor(lvl)] || 50;
-          if (currency >= cost) {
-            upgradeBtn.classList.add('active');
-          } else {
-            upgradeBtn.classList.add('cant-afford');
-          }
-          if (upLabel) upLabel.textContent = '\u2191';
-          if (upCost) upCost.textContent = cost + '\u26a1';
+          btn.style.opacity = '0.3';
+          btn.style.pointerEvents = 'none';
+          lbl.textContent = '★';
+          costSpan.textContent = 'MAX';
+          return;
         }
+
+        const cost = (lvl === 1) ? 30 : 50;
+        if (gameState === GameStates.PLANNING && currency >= cost) {
+          btn.style.opacity = '1';
+          btn.style.pointerEvents = 'auto';
+          btn.style.transform = 'scale(1.1)';
+        } else {
+          btn.style.opacity = '0.5';
+          btn.style.pointerEvents = 'auto';
+          btn.style.transform = 'none';
+        }
+        lbl.textContent = '\u2191';
+        costSpan.textContent = cost + '\u26a1';
       }
 
-      upgradeBtn.addEventListener('click', () => {
+      document.getElementById('upgrade-btn').addEventListener('click', () => {
         if (gameState !== GameStates.PLANNING) return;
         if (!selectedTower) return;
         const tower = selectedTower;
-        const lvl = Math.max(1, Math.min(tower.level || 1, 2)); // can only upgrade Lv1 or Lv2
-        const costs = [0, 30, 50];
-        const cost = costs[lvl] || 50;
+        const lvl = tower.level || 1;
+        if (lvl >= 3) return;
+        const cost = (lvl === 1) ? 30 : 50;
         if (currency < cost) return;
         currency -= cost;
         tower.level = lvl + 1;
@@ -2973,11 +2974,11 @@
         tower.fireRate = +(TOWER_TYPES[tower.type].fireRate / Math.pow(1.3, tower.level - 1)).toFixed(2);
         tower.upgradeFlash = 1.0;
         try { navigator.vibrate && navigator.vibrate(30); } catch(e) {}
-        showTooltip('UPGRADED Lv' + tower.level);
+        showTooltip('\u2191 Lv' + tower.level + '!');
         updateHUD();
         updateUpgradeButton();
       });
-      upgradeBtn.addEventListener('touchend', (e) => { e.preventDefault(); upgradeBtn.click(); });
+      document.getElementById('upgrade-btn').addEventListener('touchend', (e) => { e.preventDefault(); document.getElementById('upgrade-btn').click(); });
 
       document.getElementById('clear-btn').addEventListener('click', () => {
         if (gameState === GameStates.WAVE_ACTIVE) {
