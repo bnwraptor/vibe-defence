@@ -503,6 +503,26 @@
       if (isPathTile(col, row)) {
         return false;
       }
+      // A: Connectivity enforcement — first tile must touch SPAWN, subsequent tiles must touch last tile
+      if (pathTiles.length === 0) {
+        // First tile must be adjacent to SPAWN
+        if (!isAdjacent(col, row, SPAWN_POS.col, SPAWN_POS.row)) {
+          showTooltip('Path must start near SPAWN!');
+          return false;
+        }
+      } else {
+        // Each new tile must be adjacent to the last placed tile (sequential drawing)
+        const last = pathTiles[pathTiles.length - 1];
+        if (!isAdjacent(col, row, last.col, last.row)) {
+          showTooltip('Tile must connect to existing path!');
+          return false;
+        }
+      }
+      // Prevent placing a tile directly adjacent to BASE (short-circuits the path)
+      if (isAdjacent(col, row, BASE_POS.col, BASE_POS.row)) {
+        showTooltip('Cannot place path this close to BASE!');
+        return false;
+      }
       if (duringWave) {
         if (currency < REROUTE_COST) {
           showTooltip('Need 5💰 to reroute!');
@@ -549,43 +569,28 @@
       return towers.find(t => t.col === col && t.row === row);
     }
 
+    function isAdjacent(c1, r1, c2, r2) {
+      return (Math.abs(c1 - c2) === 1 && r1 === r2) || (Math.abs(r1 - r2) === 1 && c1 === c2);
+    }
+
+    // Validate path as a single connected chain: SPAWN -> tile0 -> tile1 -> ... -> last -> BASE
     function validatePath() {
-      // No path drawn = enemies go straight from SPAWN to BASE (still valid)
-      if (pathTiles.length === 0) return true;
-      const visited = new Set();
-      const queue = [{ col: SPAWN_POS.col, row: SPAWN_POS.row }];
-      visited.add(`${SPAWN_POS.col},${SPAWN_POS.row}`);
-
-      while (queue.length > 0) {
-        const current = queue.shift();
-        if (current.col === BASE_POS.col && current.row === BASE_POS.row) {
-          return true;
-        }
-
-        const neighbors = [
-          { col: current.col + 1, row: current.row },
-          { col: current.col - 1, row: current.row },
-          { col: current.col, row: current.row + 1 },
-          { col: current.col, row: current.row - 1 }
-        ];
-
-        for (const n of neighbors) {
-          const key = `${n.col},${n.row}`;
-          if (visited.has(key)) continue;
-          if (n.col < 0 || n.col >= COLS || n.row < 0 || n.row >= ROWS) continue;
-          const cell = grid[n.row][n.col];
-          if (cell === CELL_TYPES.PATH || cell === CELL_TYPES.BASE) {
-            visited.add(key);
-            queue.push(n);
-          }
-        }
+      if (pathTiles.length === 0) return true; // empty path = straight line (valid)
+      // First tile must be adjacent to SPAWN
+      if (!isAdjacent(pathTiles[0].col, pathTiles[0].row, SPAWN_POS.col, SPAWN_POS.row)) return false;
+      // Walk the chain: each tile must be adjacent to the previous one
+      for (let i = 1; i < pathTiles.length; i++) {
+        if (!isAdjacent(pathTiles[i].col, pathTiles[i].row, pathTiles[i-1].col, pathTiles[i-1].row)) return false;
       }
-      return false;
+      // Last tile must be adjacent to BASE
+      if (!isAdjacent(pathTiles[pathTiles.length-1].col, pathTiles[pathTiles.length-1].row, BASE_POS.col, BASE_POS.row)) return false;
+      return true;
     }
 
     function findPathDirection(col, row) {
       const idx = pathTiles.findIndex(t => t.col === col && t.row === row);
       if (idx === -1) {
+        // SPAWN or BASE itself
         if (col === SPAWN_POS.col && row === SPAWN_POS.row) {
           if (pathTiles.length > 0) {
             return getDirection(SPAWN_POS.col, SPAWN_POS.row, pathTiles[0].col, pathTiles[0].row);
@@ -594,11 +599,9 @@
         }
         return null;
       }
-
       if (idx === pathTiles.length - 1) {
         return getDirection(col, row, BASE_POS.col, BASE_POS.row);
       }
-
       const next = pathTiles[idx + 1];
       return getDirection(col, row, next.col, next.row);
     }
@@ -613,39 +616,11 @@
       }
     }
 
+    // Walk pathTiles sequentially: respects the order the player drew tiles
     function getOrderedPath() {
-      const ordered = [];
-      let current = { col: SPAWN_POS.col, row: SPAWN_POS.row };
-      const visited = new Set();
-      visited.add(`${current.col},${current.row}`);
-
-      for (let i = 0; i < pathTiles.length + 1; i++) {
-        if (current.col === BASE_POS.col && current.row === BASE_POS.row) break;
-
-        const neighbors = [
-          { col: current.col + 1, row: current.row },
-          { col: current.col - 1, row: current.row },
-          { col: current.col, row: current.row + 1 },
-          { col: current.col, row: current.row - 1 }
-        ];
-
-        let found = false;
-        for (const n of neighbors) {
-          const key = `${n.col},${n.row}`;
-          if (visited.has(key)) continue;
-          if (n.col < 0 || n.col >= COLS || n.row < 0 || n.row >= ROWS) continue;
-          const cell = grid[n.row][n.col];
-          if (cell === CELL_TYPES.PATH || cell === CELL_TYPES.BASE) {
-            visited.add(key);
-            ordered.push({ col: n.col, row: n.row });
-            current = n;
-            found = true;
-            break;
-          }
-        }
-        if (!found) break;
-      }
-      return ordered;
+      if (pathTiles.length === 0) return [];
+      // Start from the first tile (must be adjacent to SPAWN per validatePath)
+      return pathTiles.slice(); // return copy in draw-order
     }
 
     // === TOWERS ===
