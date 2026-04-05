@@ -1278,11 +1278,28 @@
       canvas.addEventListener('pointermove', handlePointerMove, { passive: false });
       canvas.addEventListener('pointerup', handlePointerUp, { passive: false });
       canvas.addEventListener('pointercancel', handlePointerCancel, { passive: false });
-      canvas.addEventListener('pointerleave', handlePointerUp, { passive: false });
       // Prevent mouse emulated events on iOS after touch
       canvas.addEventListener('mousedown', e => e.preventDefault(), { passive: false });
       // Prevent context menu and text selection
       canvas.addEventListener('contextmenu', e => e.preventDefault());
+      // Fallback: canvas click for mobile Safari
+      canvas.addEventListener('click', (e) => {
+        if (gameState !== GameStates.PLANNING) return;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const px = (e.clientX - rect.left) * scaleX;
+        const py = (e.clientY - rect.top) * scaleY;
+        const col = Math.floor(px / cellSize);
+        const row = Math.floor(py / cellSize);
+        if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return;
+        if (getCellAt(col, row) === CELL_TYPES.TOWER) {
+          selectedTower = getTowerAt(col, row);
+          towerRangeTimer = 999;
+          if (selectedTower) selectedTower.upgradeFlash = 1.0;
+          updateUpgradeButton();
+        }
+      });
     }
 
     // === HUD ===
