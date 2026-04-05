@@ -2918,6 +2918,37 @@
     }
 
     // === INIT ===
+    // Upgrade button — global function (declared outside init so all event handlers can call it)
+    function updateUpgradeButton() {
+      const btn = document.getElementById('upgrade-btn');
+      const lbl = document.getElementById('upgrade-label');
+      const costSpan = document.getElementById('upgrade-cost');
+      if (!btn || !lbl || !costSpan) return;
+
+      if (!selectedTower) {
+        btn.style.opacity = '0.3';
+        btn.style.pointerEvents = 'auto';
+        lbl.textContent = '?';
+        costSpan.textContent = '—';
+        return;
+      }
+
+      const lvl = selectedTower.level || 1;
+      if (lvl >= 3) {
+        btn.style.opacity = '0.3';
+        btn.style.pointerEvents = 'none';
+        lbl.textContent = '★';
+        costSpan.textContent = 'MAX';
+        return;
+      }
+
+      const cost = (lvl === 1) ? 30 : 50;
+      btn.style.opacity = '1';
+      btn.style.pointerEvents = 'auto';
+      lbl.textContent = '\u2191';
+      costSpan.textContent = cost + '\u26a1';
+    }
+
     function init() {
       // Load high scores from localStorage
       bestWave = parseInt(localStorage.getItem('vibe-bestWave') || '0');
@@ -2940,38 +2971,6 @@
           startWave();
         }
       });
-
-      // Upgrade button — simple direct DOM manipulation
-      function updateUpgradeButton() {
-        const btn = document.getElementById('upgrade-btn');
-        const lbl = document.getElementById('upgrade-label');
-        const costSpan = document.getElementById('upgrade-cost');
-        if (!btn || !lbl || !costSpan) return;
-
-        if (!selectedTower) {
-          // No tower selected — dim button but keep it clickable
-          btn.style.opacity = '0.3';
-          btn.style.pointerEvents = 'auto';
-          lbl.textContent = '?';
-          costSpan.textContent = '—';
-          return;
-        }
-
-        const lvl = selectedTower.level || 1;
-        if (lvl >= 3) {
-          btn.style.opacity = '0.3';
-          btn.style.pointerEvents = 'none';
-          lbl.textContent = '★';
-          costSpan.textContent = 'MAX';
-          return;
-        }
-
-        const cost = (lvl === 1) ? 30 : 50;
-        btn.style.opacity = '1';
-        btn.style.pointerEvents = 'auto';
-        lbl.textContent = '\u2191';
-        costSpan.textContent = cost + '\u26a1';
-      }
 
       document.getElementById('upgrade-btn').addEventListener('click', () => {
         if (gameState !== GameStates.PLANNING) return;
