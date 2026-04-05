@@ -2956,11 +2956,25 @@
       }
 
       upgradeBtn.addEventListener('click', () => {
-        if (gameState !== GameStates.PLANNING || !selectedTower) return;
+        if (gameState !== GameStates.PLANNING) return;
+        if (!selectedTower) return;
         const tower = selectedTower;
         const lvl = tower.level || 1;
         if (lvl >= 3) return;
         const costs = [0, 30, 50];
+        const cost = costs[lvl];
+        if (currency < cost) return;
+        currency -= cost;
+        tower.level = lvl + 1;
+        tower.damage = Math.round(TOWER_TYPES[tower.type].damage * Math.pow(1.4, tower.level - 1));
+        tower.range = +(TOWER_TYPES[tower.type].range * Math.pow(1.2, tower.level - 1)).toFixed(1);
+        tower.fireRate = +(TOWER_TYPES[tower.type].fireRate / Math.pow(1.3, tower.level - 1)).toFixed(2);
+        tower.upgradeFlash = 1.0;
+        try { navigator.vibrate && navigator.vibrate(30); } catch(e) {}
+        showTooltip('UPGRADED Lv' + tower.level);
+        updateHUD();
+        updateUpgradeButton();
+      });
         const cost = costs[lvl];
         if (currency < cost) return;
         currency -= cost;
