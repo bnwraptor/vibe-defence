@@ -2178,22 +2178,40 @@
         ctx.shadowColor = tower.color;
         ctx.shadowBlur = boosted ? 25 : 12;
 
-        // Level stars above tower — persistent upgrade indicator
+        // Level stars above tower — persistent upgrade indicator (drawn as shapes, not unicode, for cross-device consistency)
         const lvl = tower.level || 1;
         if (lvl >= 2) {
-          const starY = -baseSize / 2 - 5;
-          ctx.font = `${cellSize * 0.25}px sans-serif`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
+          const starY = -baseSize / 2 - 7;
+          const starR = cellSize * 0.13;
+          const isGold = lvl >= 3;
+          const numStars = isGold ? 3 : 2;
+          const totalW = numStars * starR * 2.2;
+          const startX = -totalW / 2 + starR;
           ctx.shadowBlur = 0;
-          if (lvl >= 3) {
-            ctx.fillStyle = '#ffd700';
-            ctx.shadowColor = '#ffd700';
-            ctx.shadowBlur = 6;
-            ctx.fillText('\u2605\u2605\u2605', 0, starY);
-          } else {
-            ctx.fillStyle = '#aaaaaa';
-            ctx.fillText('\u2606\u2606', 0, starY);
+          for (let i = 0; i < numStars; i++) {
+            const sx = startX + i * starR * 2.2;
+            const sy = starY;
+            // Draw 5-pointed star as polygon
+            ctx.beginPath();
+            for (let j = 0; j < 10; j++) {
+              const angle = (j * Math.PI / 5) - Math.PI / 2;
+              const r = j % 2 === 0 ? starR : starR * 0.4;
+              const px = sx + Math.cos(angle) * r;
+              const py = sy + Math.sin(angle) * r;
+              if (j === 0) ctx.moveTo(px, py);
+              else ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+            ctx.fillStyle = isGold ? '#ffd700' : '#c0c0c0';
+            if (isGold) {
+              ctx.shadowColor = '#ffd700';
+              ctx.shadowBlur = 6;
+            }
+            ctx.fill();
+            ctx.strokeStyle = isGold ? '#b8860b' : '#888888';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.shadowBlur = 0;
           }
         }
 
