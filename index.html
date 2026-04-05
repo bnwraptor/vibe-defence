@@ -2900,8 +2900,8 @@
         towerRangeTimer -= dt;
         if (towerRangeTimer <= 0) { selectedTower = null; }
       }
-      // Refresh upgrade button every frame
-      updateUpgradeButton();
+      // Refresh upgrade button every frame (safe - won't crash if DOM missing)
+      try { updateUpgradeButton(); } catch(e) {}
 
       // Death particles update (always run, even when paused)
       updateDeathParticles(dt);
