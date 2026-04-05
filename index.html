@@ -369,7 +369,7 @@
     const POWER_BOOST_DUR = 5;
     const SPAWN_INTERVAL = 0.8;
     const WAVE_DELAY = 3;
-    const PROJ_SPEED = 400;
+    const PROJ_SPEED = 480;
     const TOWER_TYPES = {
       TURRET: { color: '#00ffff', range: 3, fireRate: 0.5, damage: 10 },
       CANNON: { color: '#ff8800', range: 2, fireRate: 2, damage: 40 },
@@ -868,7 +868,25 @@
         const dy = (target.row + 0.5) - proj.row;
         const dist = Math.hypot(dx, dy);
 
-        if (dist < 0.2) {
+        // Predictive aim: lead fast-moving targets
+        const projSpeedCells = (PROJ_SPEED * dt) / cellSize;
+        const timeToHit = dist / projSpeedCells;
+        // Enemy velocity (cells per second)
+        const evx = (target.col - (target.prevCol || target.col)) / dt;
+        const evy = (target.row - (target.prevRow || target.row)) / dt;
+        // Predict where enemy will be
+        const predictCol = target.col + evx * timeToHit;
+        const predictRow = target.row + evy * timeToHit;
+        const pdx = (predictCol + 0.5) - proj.col;
+        const pdy = (predictRow + 0.5) - proj.row;
+        const pdist = Math.hypot(pdx, pdy);
+
+        // Use predicted direction if it improves aim (avoid division issues on near-misses)
+        const aimDist = pdist > 0.01 ? pdist : dist;
+        const aimDx = pdist > 0.01 ? pdx : dx;
+        const aimDy = pdist > 0.01 ? pdy : dy;
+
+        if (aimDist < 0.35) {
           target.hp -= proj.damage;
           if (proj.slow > 0) {
             target.slowTimer = 1;
@@ -891,9 +909,8 @@
           }
           projectiles.splice(i, 1);
         } else {
-          const speed = PROJ_SPEED * dt / cellSize;
-          proj.col += (dx / dist) * speed;
-          proj.row += (dy / dist) * speed;
+          proj.col += (aimDx / aimDist) * projSpeedCells;
+          proj.row += (aimDy / aimDist) * projSpeedCells;
         }
       }
     }
