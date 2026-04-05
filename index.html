@@ -518,11 +518,6 @@
           return false;
         }
       }
-      // Prevent placing a tile directly adjacent to BASE (short-circuits the path)
-      if (isAdjacent(col, row, BASE_POS.col, BASE_POS.row)) {
-        showTooltip('Cannot place path this close to BASE!');
-        return false;
-      }
       if (duringWave) {
         if (currency < REROUTE_COST) {
           showTooltip('Need 5💰 to reroute!');
