@@ -2178,6 +2178,25 @@
         ctx.shadowColor = tower.color;
         ctx.shadowBlur = boosted ? 25 : 12;
 
+        // Level stars above tower — persistent upgrade indicator
+        const lvl = tower.level || 1;
+        if (lvl >= 2) {
+          const starY = -baseSize / 2 - 5;
+          ctx.font = `${cellSize * 0.25}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.shadowBlur = 0;
+          if (lvl >= 3) {
+            ctx.fillStyle = '#ffd700';
+            ctx.shadowColor = '#ffd700';
+            ctx.shadowBlur = 6;
+            ctx.fillText('\u2605\u2605\u2605', 0, starY);
+          } else {
+            ctx.fillStyle = '#aaaaaa';
+            ctx.fillText('\u2606\u2606', 0, starY);
+          }
+        }
+
         if (tower.type === 'TURRET') {
           // Dark base square
           ctx.fillStyle = '#1a2a3a';
