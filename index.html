@@ -1282,8 +1282,9 @@
       canvas.addEventListener('mousedown', e => e.preventDefault(), { passive: false });
       // Prevent context menu and text selection
       canvas.addEventListener('contextmenu', e => e.preventDefault());
-      // Fallback: canvas click for mobile Safari
+      // Canvas click: tower selection
       canvas.addEventListener('click', (e) => {
+        e.stopPropagation();
         if (gameState !== GameStates.PLANNING) return;
         const rect = canvas.getBoundingClientRect();
         const scaleX = canvas.width / rect.width;
@@ -2899,6 +2900,8 @@
         towerRangeTimer -= dt;
         if (towerRangeTimer <= 0) { selectedTower = null; }
       }
+      // Refresh upgrade button every frame
+      updateUpgradeButton();
 
       // Death particles update (always run, even when paused)
       updateDeathParticles(dt);
@@ -2946,15 +2949,15 @@
         if (!btn || !lbl || !costSpan) return;
 
         if (!selectedTower) {
+          // No tower selected — dim button but keep it clickable
           btn.style.opacity = '0.3';
-          btn.style.pointerEvents = 'none';
+          btn.style.pointerEvents = 'auto';
           lbl.textContent = '?';
           costSpan.textContent = '—';
           return;
         }
 
         const lvl = selectedTower.level || 1;
-        const nextLvl = lvl + 1;
         if (lvl >= 3) {
           btn.style.opacity = '0.3';
           btn.style.pointerEvents = 'none';
@@ -2964,15 +2967,8 @@
         }
 
         const cost = (lvl === 1) ? 30 : 50;
-        if (gameState === GameStates.PLANNING && currency >= cost) {
-          btn.style.opacity = '1';
-          btn.style.pointerEvents = 'auto';
-          btn.style.transform = 'scale(1.1)';
-        } else {
-          btn.style.opacity = '0.5';
-          btn.style.pointerEvents = 'auto';
-          btn.style.transform = 'none';
-        }
+        btn.style.opacity = '1';
+        btn.style.pointerEvents = 'auto';
         lbl.textContent = '\u2191';
         costSpan.textContent = cost + '\u26a1';
       }
