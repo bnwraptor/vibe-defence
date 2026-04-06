@@ -2968,6 +2968,12 @@
         updateHUD();
       } else if (gameState === GameStates.PAUSED) {
         // Frozen - no updates, just keep rendering
+      } else if (gameState === GameStates.WAVE_ACTIVE) {
+        updateWave(dt);
+        updateTowers(dt);
+        updateEnemies(dt);
+        updateProjectiles(dt);
+        updateHUD();
       }
 
       if (pathInvalidFlash > 0) {
