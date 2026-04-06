@@ -1297,33 +1297,9 @@
       canvas.addEventListener('mousedown', e => e.preventDefault(), { passive: false });
       // Prevent context menu and text selection
       canvas.addEventListener('contextmenu', e => e.preventDefault());
-      // Canvas click: tower selection
+      // Canvas click: only handles upgrade button area — tower taps handled by handlePointerUp
       canvas.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (gameState !== GameStates.PLANNING) return;
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
-        const px = (e.clientX - rect.left) * scaleX;
-        const py = (e.clientY - rect.top) * scaleY;
-        if (cellSize <= 0) return;
-        const col = Math.floor(px / cellSize);
-        const row = Math.floor(py / cellSize);
-        if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return;
-        if (getCellAt(col, row) === CELL_TYPES.TOWER) {
-          const tower = getTowerAt(col, row);
-          // Toggle: tap same tower again to deselect
-          if (selectedTower === tower) {
-            selectedTower = null;
-            towerRangeTimer = 0;
-            updateUpgradeButton();
-          } else {
-            selectedTower = tower;
-            towerRangeTimer = 999;
-            tower.upgradeFlash = 1.0;
-            updateUpgradeButton();
-          }
-        }
+        // No-op: all canvas interactions (tower tap, path) handled by handlePointerUp/handlePointerMove
       });
     }
 
