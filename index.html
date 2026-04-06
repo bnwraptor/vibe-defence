@@ -1247,10 +1247,17 @@
           placePathTile(cell.col, cell.row, inWave);
         } else if (getCellAt(cell.col, cell.row) === CELL_TYPES.TOWER) {
           const tower = getTowerAt(cell.col, cell.row);
-          selectedTower = tower;
-          towerRangeTimer = 999;
-          tower.upgradeFlash = 1.0;
-          updateUpgradeButton();
+          // Toggle: tap same tower again to deselect
+          if (selectedTower === tower) {
+            selectedTower = null;
+            towerRangeTimer = 0;
+            updateUpgradeButton();
+          } else {
+            selectedTower = tower;
+            towerRangeTimer = 999;
+            tower.upgradeFlash = 1.0;
+            updateUpgradeButton();
+          }
         }
 
         lastTapCell = cell;
@@ -1304,10 +1311,18 @@
         const row = Math.floor(py / cellSize);
         if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return;
         if (getCellAt(col, row) === CELL_TYPES.TOWER) {
-          selectedTower = getTowerAt(col, row);
-          towerRangeTimer = 999;
-          if (selectedTower) selectedTower.upgradeFlash = 1.0;
-          updateUpgradeButton();
+          const tower = getTowerAt(col, row);
+          // Toggle: tap same tower again to deselect
+          if (selectedTower === tower) {
+            selectedTower = null;
+            towerRangeTimer = 0;
+            updateUpgradeButton();
+          } else {
+            selectedTower = tower;
+            towerRangeTimer = 999;
+            tower.upgradeFlash = 1.0;
+            updateUpgradeButton();
+          }
         }
       });
     }
