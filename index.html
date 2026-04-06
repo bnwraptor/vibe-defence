@@ -163,6 +163,23 @@
       justify-content: center;
       flex-shrink: 0;
     }
+    #speed-btn {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid #555;
+      color: #aaa;
+      font-size: 11px;
+      font-weight: bold;
+      border-radius: 6px;
+      cursor: pointer;
+      padding: 2px 6px;
+      min-width: 32px;
+      flex-shrink: 0;
+    }
+    #speed-btn.fast {
+      background: rgba(74,222,128,0.2);
+      border-color: #4ade80;
+      color: #4ade80;
+    }
     #mute-btn {
       background: rgba(255,255,255,0.1);
       border: none;
@@ -267,6 +284,7 @@
       <span class="hp-display" id="hp-text">HP: ██████░░░░</span>
       <span class="currency-display" id="currency-text">💰 100</span>
       <button id="pause-btn">⏸</button>
+      <button id="speed-btn" style="background:#222;border:1px solid #555;color:#aaa;border-radius:6px;font-size:11px;font-weight:bold;cursor:pointer;padding:2px 6px;min-width:32px">1×</button>
     </div>
     <div id="canvas-wrapper">
       <canvas id="game"></canvas>
@@ -450,6 +468,7 @@
     // Power-up state
     let powerFreezeTimer = 0;
     let powerBoostTimer = 0;
+    let speedMult = 1.0;  // game speed multiplier (0.5 = slow, 1 = normal, 2 = fast)
     let powerFreezeAvail = true;
     let powerNukeAvail = true;
     let powerBoostAvail = true;
@@ -2914,8 +2933,10 @@
 
     // === GAME LOOP ===
     function gameLoop(timestamp) {
-      const dt = Math.min((timestamp - lastTime) / 1000, 0.1);
+      const realDt = Math.min((timestamp - lastTime) / 1000, 0.1);
       lastTime = timestamp;
+      // Apply speed multiplier only to game logic
+      const dt = realDt * speedMult;
 
       // Always render regardless of state
       // Game logic updates only when WAVE_ACTIVE (not when PAUSED, PLANNING, MENU, etc.)
@@ -2927,37 +2948,36 @@
         updateHUD();
       } else if (gameState === GameStates.PAUSED) {
         // Frozen - no updates, just keep rendering
-        console.log('[GAMELOOP] PAUSED state - game logic frozen');
       }
 
       if (pathInvalidFlash > 0) {
-        pathInvalidFlash -= dt;
+        pathInvalidFlash -= realDt;
       }
 
       if (screenShake.duration > 0) {
-        screenShake.duration -= dt;
+        screenShake.duration -= realDt;
       }
 
       // Boss warning effect timers
-      if (bossWarningTimer > 0) bossWarningTimer -= dt;
-      if (bossWarningFlash > 0) bossWarningFlash -= dt * 3;
+      if (bossWarningTimer > 0) bossWarningTimer -= realDt;
+      if (bossWarningFlash > 0) bossWarningFlash -= realDt * 3;
       // Tower range indicator auto-hide after 2s
       if (towerRangeTimer > 0) {
-        towerRangeTimer -= dt;
+        towerRangeTimer -= realDt;
         if (towerRangeTimer <= 0) { selectedTower = null; }
       }
-      // Refresh upgrade button every frame (safe - won't crash if DOM missing)
+      // Refresh upgrade button every frame
       try { updateUpgradeButton(); } catch(e) {}
 
       // Death particles update (always run, even when paused)
-      updateDeathParticles(dt);
-      updateSplashRings(dt);
-      updateHitNumbers(dt);
+      updateDeathParticles(realDt);
+      updateSplashRings(realDt);
+      updateHitNumbers(realDt);
 
-      // Power-up timers
-      if (powerFreezeTimer > 0) powerFreezeTimer -= dt;
-      if (powerBoostTimer > 0) powerBoostTimer -= dt;
-      if (powerFlashTimer > 0) powerFlashTimer -= dt;
+      // Power-up timers (use realDt so button availability shows in real time)
+      if (powerFreezeTimer > 0) powerFreezeTimer -= realDt;
+      if (powerBoostTimer > 0) powerBoostTimer -= realDt;
+      if (powerFlashTimer > 0) powerFlashTimer -= realDt;
       updatePowerButtons();
 
       render();
@@ -3064,27 +3084,42 @@
       });
 
       pauseBtn.addEventListener('click', () => {
-        console.log('[PAUSE] click event fired! current state:', gameState);
         if (gameState === GameStates.WAVE_ACTIVE) {
-          console.log('[PAUSE] Pausing game, showing overlay');
           gameState = GameStates.PAUSED;
           showOverlay('PAUSED');
-          console.log('[PAUSE] gameState is now:', gameState);
-        } else {
-          console.log('[PAUSE] Ignored - not in WAVE_ACTIVE state, must be WAVE_ACTIVE to pause');
         }
       });
-      
-      // Also handle touchend for mobile Safari
       pauseBtn.addEventListener('touchend', (e) => {
         e.preventDefault();
-        console.log('[PAUSE] touchend event fired! current state:', gameState);
         if (gameState === GameStates.WAVE_ACTIVE) {
-          console.log('[PAUSE] Pausing game via touchend');
           gameState = GameStates.PAUSED;
           showOverlay('PAUSED');
         }
       });
+
+      // Speed toggle button
+      const speedBtn = document.getElementById('speed-btn');
+      function cycleSpeed() {
+        const speeds = [1.0, 1.5, 2.0];
+        const labels = ['1\u00d7', '1.5\u00d7', '2\u00d7'];
+        const idx = speeds.indexOf(speedMult);
+        speedMult = speeds[(idx + 1) % speeds.length];
+        speedBtn.textContent = labels[(idx + 1) % labels.length];
+        speedBtn.classList.toggle('fast', speedMult !== 1.0);
+        localStorage.setItem('vibe-speed', speedMult);
+      }
+      speedBtn.addEventListener('click', cycleSpeed);
+      speedBtn.addEventListener('touchend', (e) => { e.preventDefault(); cycleSpeed(); });
+      // Restore saved speed
+      const savedSpeed = parseFloat(localStorage.getItem('vibe-speed') || '1');
+      if (savedSpeed !== 1.0) {
+        speedMult = savedSpeed;
+        const speeds = [1.0, 1.5, 2.0];
+        const labels = ['1\u00d7', '1.5\u00d7', '2\u00d7'];
+        const idx = speeds.indexOf(speedMult);
+        speedBtn.textContent = labels[idx];
+        speedBtn.classList.add('fast');
+      }
 
       showOverlay('MENU');
       lastTime = performance.now();
