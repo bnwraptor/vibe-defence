@@ -403,10 +403,10 @@
     const WAVE_DELAY = 3;
     const PROJ_SPEED = 480;
     const TOWER_TYPES = {
-      TURRET: { color: '#00ffff', range: 3, fireRate: 0.5, damage: 10 },
-      CANNON: { color: '#ff8800', range: 2, fireRate: 2, damage: 40, ability: 'splash', splashRadius: 1.0, splashDamage: 0.4 },
-      SNIPER: { color: '#ff4444', range: 6, fireRate: 3, damage: 80, ability: 'pierce' },
-      FROST: { color: '#4488ff', range: 2.5, fireRate: 1, damage: 5, slow: 0.5, ability: 'aoeSlow', aoeRadius: 1.5 }
+      TURRET: { color: '#00ffff', range: 3, fireRate: 0.5, damage: 10, targeting: 'nearest' },
+      CANNON: { color: '#ff8800', range: 2, fireRate: 2, damage: 40, targeting: 'first', ability: 'splash', splashRadius: 1.0, splashDamage: 0.4 },
+      SNIPER: { color: '#ff4444', range: 6, fireRate: 3, damage: 80, targeting: 'strongest', ability: 'pierce' },
+      FROST: { color: '#4488ff', range: 2.5, fireRate: 1, damage: 5, targeting: 'weakest', slow: 0.5, ability: 'aoeSlow', aoeRadius: 1.5 }
     };
     const ENEMY_TYPES = {
       SCOUT: { shape: 'small', color: '#44ff44', baseHP: 30, speed: 3, reward: 5, armor: 0 },
@@ -666,6 +666,7 @@
         t.splashDamage = typeData.splashDamage || 0;
         t.aoeRadius = typeData.aoeRadius || 0;
         t.pierce = typeData.ability === 'pierce';
+        t.targeting = typeData.targeting || 'nearest';
         grid[t.row][t.col] = CELL_TYPES.TOWER;
       }
     }
@@ -716,10 +717,32 @@
             }
           }
 
+          // Find target based on targeting mode
+          const tgt = tower.targeting || 'nearest';
+          let targetEnemy = nearestEnemy;
+          if (tgt !== 'nearest') {
+            const inRange = enemies.filter(e => {
+              const d = Math.hypot(e.col - tower.col, e.row - tower.row);
+              return d <= tower.range;
+            });
+            if (inRange.length > 1) {
+              switch (tgt) {
+                case 'first':
+                  targetEnemy = inRange.reduce(function(a,b){return a.pathIndex > b.pathIndex ? a : b}); break;
+                case 'last':
+                  targetEnemy = inRange.reduce(function(a,b){return a.pathIndex < b.pathIndex ? a : b}); break;
+                case 'weakest':
+                  targetEnemy = inRange.reduce(function(a,b){return a.hp < b.hp ? a : b}); break;
+                case 'strongest':
+                  targetEnemy = inRange.reduce(function(a,b){return a.hp > b.hp ? a : b}); break;
+              }
+            }
+          }
+
           projectiles.push({
             col: tower.col + 0.5,
             row: tower.row + 0.5,
-            target: nearestEnemy,
+            target: targetEnemy,
             damage: effectiveDamage,
             color: tower.color,
             slow: tower.slow,
@@ -1283,12 +1306,23 @@
       longPressTimer = setTimeout(() => {
         if (pointerDown && pointerStart && pointerStart.col === cell.col && pointerStart.row === cell.row) {
           if (isPathTile(cell.col, cell.row)) {
-            console.log('[longpress] removing tile');
-            removePathTile(cell.col, cell.row, inWave);
-            pointerDown = false;
-            pointerStart = null;
+            removePathTile(cell.col, cell.row);
+          } else if (getCellAt(cell.col, cell.row) === CELL_TYPES.TOWER) {
+            const tower = getTowerAt(cell.col, cell.row);
+            if (tower) {
+              const modes = ['nearest', 'first', 'last', 'weakest', 'strongest'];
+              const idx = modes.indexOf(tower.targeting || 'nearest');
+              tower.targeting = modes[(idx + 1) % modes.length];
+              showTooltip('\u2699 ' + tower.targeting.toUpperCase());
+            }
+            selectedTower = tower;
+            towerRangeTimer = 999;
+            if (tower) tower.upgradeFlash = 1.0;
+            updateUpgradeButton();
           }
         }
+        pointerDown = false;
+        pointerStart = null;
       }, LONG_PRESS_DELAY);
     }
 
