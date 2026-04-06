@@ -387,28 +387,29 @@
     const PROJ_SPEED = 480;
     const TOWER_TYPES = {
       TURRET: { color: '#00ffff', range: 3, fireRate: 0.5, damage: 10 },
-      CANNON: { color: '#ff8800', range: 2, fireRate: 2, damage: 40 },
-      SNIPER: { color: '#ff4444', range: 6, fireRate: 3, damage: 80 },
-      FROST: { color: '#4488ff', range: 2.5, fireRate: 1, damage: 5, slow: 0.5 }
+      CANNON: { color: '#ff8800', range: 2, fireRate: 2, damage: 40, ability: 'splash', splashRadius: 1.0, splashDamage: 0.4 },
+      SNIPER: { color: '#ff4444', range: 6, fireRate: 3, damage: 80, ability: 'pierce' },
+      FROST: { color: '#4488ff', range: 2.5, fireRate: 1, damage: 5, slow: 0.5, ability: 'aoeSlow', aoeRadius: 1.5 }
     };
     const ENEMY_TYPES = {
-      SCOUT: { shape: 'small', color: '#44ff44', baseHP: 30, speed: 3, reward: 5 },
-      SOLDIER: { shape: 'medium', color: '#ffff44', baseHP: 80, speed: 2, reward: 10 },
-      TANK: { shape: 'large', color: '#888888', baseHP: 200, speed: 1, reward: 25 },
-      SPEEDSTER: { shape: 'small', color: '#ff44ff', baseHP: 20, speed: 5, reward: 8 },
-      BOSS: { shape: 'large', color: '#aa44ff', baseHP: 500, speed: 0.8, reward: 100, isBoss: true }
+      SCOUT: { shape: 'small', color: '#44ff44', baseHP: 30, speed: 3, reward: 5, armor: 0 },
+      SOLDIER: { shape: 'medium', color: '#ffff44', baseHP: 80, speed: 2, reward: 10, armor: 0 },
+      TANK: { shape: 'large', color: '#888888', baseHP: 200, speed: 1, reward: 25, armor: 15 },
+      SPEEDSTER: { shape: 'small', color: '#ff44ff', baseHP: 20, speed: 5, reward: 8, armor: 0 },
+      ARMORED: { shape: 'large', color: '#aa6644', baseHP: 150, speed: 1.2, reward: 20, armor: 20 },
+      BOSS: { shape: 'large', color: '#aa44ff', baseHP: 500, speed: 0.8, reward: 100, isBoss: true, armor: 25 }
     };
     const WAVE_DEFINITIONS = [
       [{ type: 'SCOUT', count: 5 }],
       [{ type: 'SCOUT', count: 8 }, { type: 'SOLDIER', count: 2 }],
       [{ type: 'SCOUT', count: 5 }, { type: 'SOLDIER', count: 5 }],
-      [{ type: 'SOLDIER', count: 10 }, { type: 'TANK', count: 2 }],
-      [{ type: 'SOLDIER', count: 8 }, { type: 'TANK', count: 3 }, { type: 'SPEEDSTER', count: 1 }],
-      [{ type: 'SCOUT', count: 5 }, { type: 'SOLDIER', count: 5 }, { type: 'TANK', count: 5 }, { type: 'SPEEDSTER', count: 2 }],
-      [{ type: 'SOLDIER', count: 10 }, { type: 'TANK', count: 5 }, { type: 'SPEEDSTER', count: 5 }],
-      [{ type: 'SOLDIER', count: 15 }, { type: 'TANK', count: 8 }, { type: 'SPEEDSTER', count: 8 }],
-      [{ type: 'SCOUT', count: 5 }, { type: 'SOLDIER', count: 5 }, { type: 'TANK', count: 5 }, { type: 'SPEEDSTER', count: 5 }, { type: 'BOSS', count: 3 }],
-      [{ type: 'SOLDIER', count: 20 }, { type: 'TANK', count: 10 }, { type: 'SPEEDSTER', count: 10 }, { type: 'BOSS', count: 5 }]
+      [{ type: 'SOLDIER', count: 10 }, { type: 'TANK', count: 2 }, { type: 'ARMORED', count: 1 }],
+      [{ type: 'SOLDIER', count: 8 }, { type: 'TANK', count: 3 }, { type: 'SPEEDSTER', count: 1 }, { type: 'ARMORED', count: 1 }],
+      [{ type: 'SCOUT', count: 5 }, { type: 'SOLDIER', count: 5 }, { type: 'TANK', count: 5 }, { type: 'SPEEDSTER', count: 2 }, { type: 'ARMORED', count: 1 }],
+      [{ type: 'SOLDIER', count: 10 }, { type: 'TANK', count: 5 }, { type: 'SPEEDSTER', count: 5 }, { type: 'ARMORED', count: 2 }],
+      [{ type: 'SOLDIER', count: 15 }, { type: 'TANK', count: 8 }, { type: 'SPEEDSTER', count: 8 }, { type: 'ARMORED', count: 2 }],
+      [{ type: 'SCOUT', count: 5 }, { type: 'SOLDIER', count: 5 }, { type: 'TANK', count: 5 }, { type: 'SPEEDSTER', count: 5 }, { type: 'ARMORED', count: 3 }, { type: 'BOSS', count: 3 }],
+      [{ type: 'SOLDIER', count: 20 }, { type: 'TANK', count: 10 }, { type: 'SPEEDSTER', count: 10 }, { type: 'ARMORED', count: 5 }, { type: 'BOSS', count: 5 }]
     ];
 
     // === STATE ===
@@ -419,6 +420,7 @@
     let enemies = [];
     let projectiles = [];
     let deathParticles = [];  // {x, y, vx, vy, color, size, life, maxLife}
+    let splashRings = [];  // {col, row, radius, life}
     let hitNumbers = [];       // {x, y, text, color, life, vy}
     let pathTiles = [];
     let tileBudget = STARTING_TILE_BUDGET;  // total tiles available (accumulates)
@@ -652,6 +654,12 @@
         t.angle = 0;
         t.muzzleFlash = 0;
         t.recoil = 0;
+        // Tower abilities
+        t.ability = typeData.ability || null;
+        t.splashRadius = typeData.splashRadius || 0;
+        t.splashDamage = typeData.splashDamage || 0;
+        t.aoeRadius = typeData.aoeRadius || 0;
+        t.pierce = typeData.ability === 'pierce';
         grid[t.row][t.col] = CELL_TYPES.TOWER;
       }
     }
@@ -691,6 +699,17 @@
           tower.cooldown = effectiveFireRate;
           tower.muzzleFlash = 1.0;
           tower.recoil = 1.0;
+
+          // Frost AoE slow: apply to all enemies in range on each frost shot
+          if (tower.type === 'FROST' && tower.aoeRadius) {
+            for (const enemy of enemies) {
+              const dist = Math.hypot(enemy.col - tower.col, enemy.row - tower.row);
+              if (dist <= tower.aoeRadius) {
+                enemy.slowTimer = Math.max(enemy.slowTimer || 0, 1.0);
+              }
+            }
+          }
+
           projectiles.push({
             col: tower.col + 0.5,
             row: tower.row + 0.5,
@@ -699,7 +718,11 @@
             color: tower.color,
             slow: tower.slow,
             trail: [],
-            boosted: boosted
+            boosted: boosted,
+            towerType: tower.type,
+            pierce: tower.type === 'SNIPER' ? true : false,
+            splashRadius: tower.type === 'CANNON' ? tower.splashRadius : 0,
+            splashDamage: tower.type === 'CANNON' ? Math.round(effectiveDamage * tower.splashDamage) : 0
           });
           playShootSound();
         }
@@ -725,6 +748,7 @@
         color: typeData.color,
         shape: typeData.shape,
         isBoss: typeData.isBoss || false,
+        armor: typeData.armor || 0,
         pathIndex: 0,
         slowTimer: 0,
         deathTimer: 0,
@@ -881,19 +905,61 @@
         const dist = Math.hypot(dx, dy);
 
         if (dist < 0.3) {
-          target.hp -= proj.damage;
-          if (proj.slow > 0) {
+          // Armor reduction (pierce bypasses armor)
+          const armorPierced = proj.pierce;
+          const targetArmor = armorPierced ? 0 : (target.armor || 0);
+          const damageDealt = Math.max(1, proj.damage - targetArmor);
+          target.hp -= damageDealt;
+
+          if (proj.slow > 0 && !armorPierced) {
             target.slowTimer = 1;
           }
+
+          // Splash damage for cannon
+          if (proj.splashRadius > 0) {
+            for (const enemy of enemies) {
+              if (enemy === target || enemy.dying) continue;
+              const sdx = enemy.col - target.col;
+              const sdy = enemy.row - target.row;
+              const sdist = Math.hypot(sdx, sdy);
+              if (sdist <= proj.splashRadius) {
+                const splashArmor = armorPierced ? 0 : (enemy.armor || 0);
+                const splashDmg = Math.max(1, proj.splashDamage - splashArmor);
+                enemy.hp -= splashDmg;
+                // Splash hit number
+                const sx = (enemy.col + 0.5) * cellSize;
+                const sy = (enemy.row + 0.5) * cellSize;
+                hitNumbers.push({
+                  x: sx + (Math.random() - 0.5) * 8,
+                  y: sy - 5,
+                  text: '-' + splashDmg,
+                  color: '#ff8800',
+                  life: 0.5,
+                  vy: -30,
+                  scale: 0.9
+                });
+                if (enemy.hp <= 0) killEnemy(enemy);
+              }
+            }
+            // Splash ring effect
+            splashRings.push({
+              col: target.col,
+              row: target.row,
+              radius: proj.splashRadius,
+              life: 0.25
+            });
+          }
+
           // Floating damage number
           const hx = (target.col + 0.5) * cellSize;
           const hy = (target.row + 0.5) * cellSize;
           const isBoost = proj.boosted;
+          const isPierce = proj.pierce;
           hitNumbers.push({
             x: hx + (Math.random() - 0.5) * 10,
             y: hy - 5,
-            text: '-' + Math.round(proj.damage),
-            color: isBoost ? '#ffd700' : '#ffffff',
+            text: '-' + Math.round(damageDealt),
+            color: isBoost ? '#ffd700' : (isPierce ? '#ff4444' : '#ffffff'),
             life: 0.6,
             vy: -40,
             scale: isBoost ? 1.3 : 1.0
@@ -928,6 +994,15 @@
       }
     }
 
+    function updateSplashRings(dt) {
+      for (let i = splashRings.length - 1; i >= 0; i--) {
+        splashRings[i].life -= dt;
+        if (splashRings[i].life <= 0) {
+          splashRings.splice(i, 1);
+        }
+      }
+    }
+
     function drawDeathParticles() {
       for (const p of deathParticles) {
         const alpha = p.life / (p.maxLife || 1);
@@ -943,6 +1018,25 @@
       }
       ctx.globalAlpha = 1;
       ctx.shadowBlur = 0;
+    }
+
+    function drawSplashRings() {
+      for (const ring of splashRings) {
+        const cx = (ring.col + 0.5) * cellSize;
+        const cy = (ring.row + 0.5) * cellSize;
+        const r = ring.radius * cellSize;
+        const alpha = ring.life / 0.25;
+        ctx.globalAlpha = alpha * 0.8;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.strokeStyle = '#ff8800';
+        ctx.lineWidth = 3;
+        ctx.shadowColor = '#ff8800';
+        ctx.shadowBlur = 10;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = 1;
+      }
     }
 
     // === HIT NUMBERS ===
@@ -1440,15 +1534,15 @@
             </div>
             <div style="background:#1a1a2e;padding:10px;border-radius:8px;display:flex;align-items:center;gap:10px">
               <canvas id="preview-cannon" width="50" height="50" style="image-rendering:pixelated"></canvas>
-              <div><span style="color:#ff8800;font-weight:bold">CANNON</span><br>Range: 2 &nbsp; DMG: 40 &nbsp; Rate: 2s<br><span style="color:#666">Slow, high damage</span></div>
+              <div><span style="color:#ff8800;font-weight:bold">CANNON</span><br>Range: 2 &nbsp; DMG: 40 &nbsp; Rate: 2s<br><span style="color:#ff8800">Splash damage</span></div>
             </div>
             <div style="background:#1a1a2e;padding:10px;border-radius:8px;display:flex;align-items:center;gap:10px">
               <canvas id="preview-sniper" width="50" height="50" style="image-rendering:pixelated"></canvas>
-              <div><span style="color:#ff4444;font-weight:bold">SNIPER</span><br>Range: 6 &nbsp; DMG: 80 &nbsp; Rate: 3s<br><span style="color:#666">Long range, max damage</span></div>
+              <div><span style="color:#ff4444;font-weight:bold">SNIPER</span><br>Range: 6 &nbsp; DMG: 80 &nbsp; Rate: 3s<br><span style="color:#ff6666">Armor piercing</span></div>
             </div>
             <div style="background:#1a1a2e;padding:10px;border-radius:8px;display:flex;align-items:center;gap:10px">
               <canvas id="preview-frost" width="50" height="50" style="image-rendering:pixelated"></canvas>
-              <div><span style="color:#4488ff;font-weight:bold">FROST</span><br>Range: 2.5 &nbsp; DMG: 5 &nbsp; Rate: 1s<br><span style="color:#88aaff">Slows enemies 50%</span></div>
+              <div><span style="color:#4488ff;font-weight:bold">FROST</span><br>Range: 2.5 &nbsp; DMG: 5 &nbsp; Rate: 1s<br><span style="color:#88aaff">AoE slow aura</span></div>
             </div>
           </div>
           <h2 style="color:#fff;font-size:14px;margin:14px 0 6px">Power-Ups</h2>
@@ -1694,6 +1788,7 @@
       waveSpeedMult = 1.0;
       enemies = [];
       projectiles = [];
+      splashRings = [];
       waveEnemyQueue = [];
       powerFreezeAvail = true;
       powerNukeAvail = true;
@@ -1753,6 +1848,7 @@
       drawEnemies();
       drawProjectiles();
       drawDeathParticles();
+      drawSplashRings();
       drawHitNumbers();
       drawSpawnAndBase();
 
@@ -2855,6 +2951,7 @@
 
       // Death particles update (always run, even when paused)
       updateDeathParticles(dt);
+      updateSplashRings(dt);
       updateHitNumbers(dt);
 
       // Power-up timers
