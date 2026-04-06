@@ -398,7 +398,6 @@
     const POWER_NUKE_COST = 35;
     const POWER_NUKE_DAMAGE = 50;
     const POWER_BOOST_COST = 25;
-    const REROUTE_COST = 5;
     const POWER_BOOST_DUR = 5;
     const SPAWN_INTERVAL = 0.8;
     const WAVE_DELAY = 3;
@@ -551,31 +550,19 @@
           return false;
         }
       }
-      if (duringWave) {
-        if (currency < REROUTE_COST) {
-          showTooltip('Need 5💰 to reroute!');
-          return false;
-        }
-        currency -= REROUTE_COST;
-        showTooltip('REROUTE 5💰');
-      }
       pathTiles.push({ col, row });
       tileBudget--;
       grid[row][col] = CELL_TYPES.PATH;
       playPlaceSound();
-      if (duringWave) vibrate();
       flashTile(col, row, '#4a4a6a', 100);
       updateHUD();
       if (gameState === GameStates.PLANNING) setStartButton(true);
       return true;
     }
 
-    function removePathTile(col, row, duringWave = false) {
+    function removePathTile(col, row) {
       const idx = pathTiles.findIndex(t => t.col === col && t.row === row);
       if (idx === -1) return false;
-      if (duringWave) {
-        currency += REROUTE_COST;
-      }
       pathTiles.splice(idx, 1);
       tileBudget++;
       grid[row][col] = CELL_TYPES.EMPTY;
@@ -1441,23 +1428,6 @@
         budgetFill.style.width = `${(pathTiles.length / Math.max(tileBudget, 1)) * 100}%`;
       }
 
-      updateClearButton();
-    }
-
-    function updateClearButton() {
-      const btn = document.getElementById('clear-btn');
-      if (!btn) return;
-      if (gameState === GameStates.WAVE_ACTIVE) {
-        btn.textContent = 'REROUTE';
-        btn.style.color = '#ffd700';
-        btn.style.border = '1px solid #ffd700';
-        btn.disabled = false;
-      } else {
-        btn.textContent = 'CLEAR';
-        btn.style.color = '#aaa';
-        btn.style.border = 'none';
-        btn.disabled = false;
-      }
     }
 
     function setStartButton(valid) {
@@ -1652,21 +1622,7 @@
       updateHUD();
       if (gameState === GameStates.PLANNING) setStartButton(false);
       playRemoveSound();
-    }
 
-    function clearPathReroute() {
-      // Clear all path tiles during WAVE_ACTIVE, refunding each at REROUTE_COST
-      const count = pathTiles.length;
-      if (count === 0) return;
-      currency += count * REROUTE_COST;
-      showTooltip(`REROUTE ${count * REROUTE_COST}💰 refund!`);
-      for (const tile of pathTiles) {
-        grid[tile.row][tile.col] = CELL_TYPES.EMPTY;
-        tileBudget++;
-      }
-      pathTiles = [];
-      updateHUD();
-      playRemoveSound();
     }
 
     function resetPathBudget() {
@@ -2970,7 +2926,7 @@
 
       // Always render regardless of state
       // Game logic updates only when WAVE_ACTIVE (not when PAUSED, PLANNING, MENU, etc.)
-      if (gameState === GameStates.WAVE_ACTIVE) {
+      if (false) { // REMOVED reroute
         updateWave(dt);
         updateTowers(dt);
         updateEnemies(dt);
@@ -3089,7 +3045,7 @@
       document.getElementById('upgrade-btn').addEventListener('touchend', (e) => { e.preventDefault(); document.getElementById('upgrade-btn').click(); });
 
       document.getElementById('clear-btn').addEventListener('click', () => {
-        if (gameState === GameStates.WAVE_ACTIVE) {
+        if (false) { // REMOVED reroute
           clearPathReroute();
         } else if (gameState === GameStates.PLANNING || gameState === GameStates.MENU) {
           clearPath();
@@ -3114,14 +3070,14 @@
       });
 
       pauseBtn.addEventListener('click', () => {
-        if (gameState === GameStates.WAVE_ACTIVE) {
+        if (false) { // REMOVED reroute
           gameState = GameStates.PAUSED;
           showOverlay('PAUSED');
         }
       });
       pauseBtn.addEventListener('touchend', (e) => {
         e.preventDefault();
-        if (gameState === GameStates.WAVE_ACTIVE) {
+        if (false) { // REMOVED reroute
           gameState = GameStates.PAUSED;
           showOverlay('PAUSED');
         }
