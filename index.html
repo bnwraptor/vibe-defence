@@ -1791,6 +1791,7 @@
 
     function restartGame() {
       clearPath();
+      tileBudget = STARTING_TILE_BUDGET;
       currency = currentDifficulty.startCurrency;
       baseHP = currentDifficulty.startHp;
       currentWave = 1;
@@ -1894,12 +1895,20 @@
         // Warning text
         if (bossWarningTimer > 0.5) {
           ctx.save();
-          ctx.font = `bold ${cellSize * 2}px sans-serif`;
+          // Scale font to fit canvas width
+          const maxWidth = canvas.width * 0.85;
+          let fontSize = canvas.width * 0.07;
+          ctx.font = `bold ${fontSize}px sans-serif`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
           ctx.fillStyle = '#ff0000';
           ctx.shadowColor = '#ff0000';
           ctx.shadowBlur = 20;
+          // Scale down until text fits
+          while (ctx.measureText('⚠ BOSS INCOMING ⚠').width > maxWidth && fontSize > 16) {
+            fontSize -= 2;
+            ctx.font = `bold ${fontSize}px sans-serif`;
+          }
           ctx.fillText('⚠ BOSS INCOMING ⚠', canvas.width/2, canvas.height/2);
           ctx.restore();
         }
