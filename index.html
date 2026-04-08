@@ -417,14 +417,6 @@
       BOSS: { shape: 'large', color: '#aa44ff', baseHP: 500, speed: 0.8, reward: 100, isBoss: true, armor: 25 }
     };
 
-    // Power-up constants
-    const POWER_FREEZE_COST = 20;
-    const POWER_NUKE_COST = 35;
-    const POWER_BOOST_COST = 25;
-    const POWER_FREEZE_DUR = 3;
-    const POWER_BOOST_DUR = 5;
-    const POWER_NUKE_DAMAGE = 50;
-
     const WAVE_DEFINITIONS = [
       [{ type: 'SCOUT', count: 5 }],
       [{ type: 'SCOUT', count: 8 }, { type: 'SOLDIER', count: 2 }],
@@ -537,7 +529,6 @@
 
     // === PATH ===
     function placePathTile(col, row, duringWave = false) {
-      console.log('[INPUT] placePathTile:', col, row, 'budget:', tileBudget, 'duringWave:', duringWave);
       if (tileBudget <= 0) {
         showTooltip('No path budget!');
         return false;
@@ -575,7 +566,6 @@
     }
 
     function removePathTile(col, row) {
-      console.log('[INPUT] removePathTile:', col, row, 'pathTiles.length:', pathTiles.length);
       const idx = pathTiles.findIndex(t => t.col === col && t.row === row);
       if (idx === -1) return false;
       pathTiles.splice(idx, 1);
@@ -913,6 +903,7 @@
       currency += enemy.reward;
       playDeathSound();
       vibrate();
+      if (enemy.isBoss) screenShake.duration = 0.4;
       updateHUD();
       // Spawn death particles at enemy position
       const cx = (enemy.col + 0.5) * cellSize;
@@ -1216,7 +1207,7 @@
           waveSpeedMult = 1 + (currentWave - 10) * 0.03;  // update speed scaling
           currency += WAVE_BONUS;
           gameState = GameStates.PLANNING;
-          setStartButton(false);
+          setStartButton(pathTiles.length > 0);
           updateHUD();
           updateBuyHpButton();
           updatePowerButtons();
@@ -1294,15 +1285,12 @@
       const y = (screenY - rect.top) * scaleY;
       const col = Math.floor(x / cellSize);
       const row = Math.floor(y / cellSize);
-      console.log('[INPUT] screenToCell:', { screenX, screenY, rectLeft: Math.round(rect.left), rectTop: Math.round(rect.top), x: Math.round(x), y: Math.round(y), col, row, cellSize, canvasW: canvas.width, canvasH: canvas.height });
       if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return null;
       return { col, row };
     }
 
     function handlePointerDown(e) {
-      console.log('[INPUT] pointerdown pointerId:', e.pointerId, 'pointerType:', e.pointerType, 'gameState:', gameState, 'touches:', e.touches ? e.touches.length : 0);
       if (gameState !== GameStates.PLANNING && gameState !== GameStates.WAVE_ACTIVE) {
-        console.log('[INPUT] pointerdown rejected - state not PLANNING or WAVE_ACTIVE');
         return;
       }
       e.preventDefault();
@@ -1316,14 +1304,12 @@
       }
 
       const cell = screenToCell(e.clientX, e.clientY);
-      console.log('[INPUT] pointerdown cell:', cell);
 
       if (!cell) { return; }
 
       pointerDown = true;
       pointerStart = cell;
       pointerLastCell = cell;
-      console.log('[INPUT] pointerdown set pointerLastCell:', pointerLastCell);
 
       longPressTimer = setTimeout(() => {
         if (pointerDown && pointerStart && pointerStart.col === cell.col && pointerStart.row === cell.row) {
@@ -1349,26 +1335,21 @@
     }
 
     function handlePointerMove(e) {
-      console.log('[INPUT] pointermove pointerId:', e.pointerId, 'activeTouchId:', activeTouchId, 'pointerDown:', pointerDown, 'pointerType:', e.pointerType);
       if (!pointerDown || (gameState !== GameStates.PLANNING && gameState !== GameStates.WAVE_ACTIVE)) {
-        console.log('[INPUT] pointermove rejected - pointerDown:', pointerDown, 'state:', gameState);
         return;
       }
       // Only handle the active pointer id (ignores other fingers)
       if (e.pointerType === 'touch' && e.pointerId !== activeTouchId) {
-        console.log('[INPUT] pointermove ignored - pointerId mismatch');
         return;
       }
       e.preventDefault();
 
       const cell = screenToCell(e.clientX, e.clientY);
-      console.log('[INPUT] pointermove cell:', cell, 'lastCell:', pointerLastCell);
       if (!cell) return;
 
       const lastCell = pointerLastCell;
       // Place tile when entering a NEW cell (handles both initial cell and subsequent moves)
       if (!lastCell || cell.col !== lastCell.col || cell.row !== lastCell.row) {
-        console.log('[INPUT] pointermove new cell, placing tile');
         if (isCellEmpty(cell.col, cell.row) && !isPathTile(cell.col, cell.row)) {
           placePathTile(cell.col, cell.row, true); // duringWave = true for drag
         }
@@ -1377,31 +1358,25 @@
     }
 
     function handlePointerUp(e) {
-      console.log('[INPUT] pointerup pointerDown:', pointerDown, 'activeTouchId:', activeTouchId, 'pointerId:', e.pointerId);
-      if (!pointerDown) { console.log('[INPUT] pointerup rejected - pointerDown was false'); return; }
       // Allow pointer up during WAVE_ACTIVE for rerouting
       const inWave = gameState === GameStates.WAVE_ACTIVE;
       e.preventDefault();
       clearTimeout(longPressTimer);
 
       const cell = pointerStart;
-      console.log('[INPUT] pointerup cell:', cell, 'lastCell:', pointerLastCell);
       if (!cell) { pointerDown = false; pointerStart = null; pointerLastCell = null; activeTouchId = null; return; }
 
       const moved = pointerLastCell && (
         Math.abs(pointerLastCell.col - pointerStart.col) > 1 ||
         Math.abs(pointerLastCell.row - pointerStart.row) > 1
       );
-      console.log('[INPUT] pointerup moved:', moved);
 
       if (!moved) {
         const now = Date.now();
 
         if (isPathTile(cell.col, cell.row)) {
-          console.log('[INPUT] pointerup removing path tile:', cell);
           removePathTile(cell.col, cell.row, inWave);
         } else if (getCellAt(cell.col, cell.row) === CELL_TYPES.EMPTY) {
-          console.log('[INPUT] pointerup placing path tile:', cell);
           placePathTile(cell.col, cell.row, inWave);
         } else if (getCellAt(cell.col, cell.row) === CELL_TYPES.TOWER) {
           const tower = getTowerAt(cell.col, cell.row);
@@ -1459,7 +1434,6 @@
       const canvasWrapper = document.getElementById('canvas-wrapper');
       if (canvasWrapper) {
         canvasWrapper.addEventListener('touchstart', (e) => {
-          console.log('[INPUT] canvas-wrapper touchstart:', e.touches.length);
           // Forward to canvas
           const touch = e.touches[0];
           const rect = canvas.getBoundingClientRect();
@@ -1475,7 +1449,6 @@
         }, { passive: false });
 
         canvasWrapper.addEventListener('touchmove', (e) => {
-          console.log('[INPUT] canvas-wrapper touchmove');
           const touch = e.touches[0];
           const syntheticEvent = {
             clientX: touch.clientX,
@@ -1490,7 +1463,6 @@
         }, { passive: false });
 
         canvasWrapper.addEventListener('touchend', (e) => {
-          console.log('[INPUT] canvas-wrapper touchend');
           const touch = e.changedTouches[0];
           const syntheticEvent = {
             pointerId: touch.identifier,
@@ -1502,7 +1474,6 @@
         }, { passive: false });
 
         canvasWrapper.addEventListener('touchcancel', (e) => {
-          console.log('[INPUT] canvas-wrapper touchcancel');
           handlePointerCancel({});
         }, { passive: false });
       }
@@ -3203,8 +3174,8 @@
       // Speed toggle button
       const speedBtn = document.getElementById('speed-btn');
       function cycleSpeed() {
-        const speeds = [1.0, 1.5, 2.0];
-        const labels = ['1\u00d7', '1.5\u00d7', '2\u00d7'];
+        const speeds = [1.0, 1.5, 2.0, 3.0, 5.0];
+        const labels = ['1\u00d7', '1.5\u00d7', '2\u00d7', '3\u00d7', '5\u00d7'];
         const idx = speeds.indexOf(speedMult);
         speedMult = speeds[(idx + 1) % speeds.length];
         speedBtn.textContent = labels[(idx + 1) % labels.length];
@@ -3217,8 +3188,8 @@
       const savedSpeed = parseFloat(localStorage.getItem('vibe-speed') || '1');
       if (savedSpeed !== 1.0) {
         speedMult = savedSpeed;
-        const speeds = [1.0, 1.5, 2.0];
-        const labels = ['1\u00d7', '1.5\u00d7', '2\u00d7'];
+        const speeds = [1.0, 1.5, 2.0, 3.0, 5.0];
+        const labels = ['1\u00d7', '1.5\u00d7', '2\u00d7', '3\u00d7', '5\u00d7'];
         const idx = speeds.indexOf(speedMult);
         speedBtn.textContent = labels[idx];
         speedBtn.classList.add('fast');
