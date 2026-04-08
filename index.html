@@ -537,6 +537,7 @@
 
     // === PATH ===
     function placePathTile(col, row, duringWave = false) {
+      console.log('[INPUT] placePathTile:', col, row, 'budget:', tileBudget, 'duringWave:', duringWave);
       if (tileBudget <= 0) {
         showTooltip('No path budget!');
         return false;
@@ -574,6 +575,7 @@
     }
 
     function removePathTile(col, row) {
+      console.log('[INPUT] removePathTile:', col, row, 'pathTiles.length:', pathTiles.length);
       const idx = pathTiles.findIndex(t => t.col === col && t.row === row);
       if (idx === -1) return false;
       pathTiles.splice(idx, 1);
@@ -1298,8 +1300,11 @@
     }
 
     function handlePointerDown(e) {
-
-      if (gameState !== GameStates.PLANNING && gameState !== GameStates.WAVE_ACTIVE) { return; }
+      console.log('[INPUT] pointerdown pointerId:', e.pointerId, 'pointerType:', e.pointerType, 'gameState:', gameState, 'touches:', e.touches ? e.touches.length : 0);
+      if (gameState !== GameStates.PLANNING && gameState !== GameStates.WAVE_ACTIVE) {
+        console.log('[INPUT] pointerdown rejected - state not PLANNING or WAVE_ACTIVE');
+        return;
+      }
       e.preventDefault();
 
       // Reject if this is a mouse event emulated after touch (iOS Safari fix)
@@ -1311,12 +1316,14 @@
       }
 
       const cell = screenToCell(e.clientX, e.clientY);
+      console.log('[INPUT] pointerdown cell:', cell);
 
       if (!cell) { return; }
 
       pointerDown = true;
       pointerStart = cell;
       pointerLastCell = cell;
+      console.log('[INPUT] pointerdown set pointerLastCell:', pointerLastCell);
 
       longPressTimer = setTimeout(() => {
         if (pointerDown && pointerStart && pointerStart.col === cell.col && pointerStart.row === cell.row) {
@@ -1342,16 +1349,26 @@
     }
 
     function handlePointerMove(e) {
-      if (!pointerDown || (gameState !== GameStates.PLANNING && gameState !== GameStates.WAVE_ACTIVE)) return;
+      console.log('[INPUT] pointermove pointerId:', e.pointerId, 'activeTouchId:', activeTouchId, 'pointerDown:', pointerDown, 'pointerType:', e.pointerType);
+      if (!pointerDown || (gameState !== GameStates.PLANNING && gameState !== GameStates.WAVE_ACTIVE)) {
+        console.log('[INPUT] pointermove rejected - pointerDown:', pointerDown, 'state:', gameState);
+        return;
+      }
       // Only handle the active pointer id (ignores other fingers)
-      if (e.pointerType === 'touch' && e.pointerId !== activeTouchId) return;
+      if (e.pointerType === 'touch' && e.pointerId !== activeTouchId) {
+        console.log('[INPUT] pointermove ignored - pointerId mismatch');
+        return;
+      }
       e.preventDefault();
 
       const cell = screenToCell(e.clientX, e.clientY);
+      console.log('[INPUT] pointermove cell:', cell, 'lastCell:', pointerLastCell);
       if (!cell) return;
 
-      if (pointerLastCell && (cell.col !== pointerLastCell.col || cell.row !== pointerLastCell.row)) {
-
+      const lastCell = pointerLastCell;
+      // Place tile when entering a NEW cell (handles both initial cell and subsequent moves)
+      if (!lastCell || cell.col !== lastCell.col || cell.row !== lastCell.row) {
+        console.log('[INPUT] pointermove new cell, placing tile');
         if (isCellEmpty(cell.col, cell.row) && !isPathTile(cell.col, cell.row)) {
           placePathTile(cell.col, cell.row, true); // duringWave = true for drag
         }
@@ -1360,31 +1377,31 @@
     }
 
     function handlePointerUp(e) {
-
-      if (!pointerDown) { return; }
+      console.log('[INPUT] pointerup pointerDown:', pointerDown, 'activeTouchId:', activeTouchId, 'pointerId:', e.pointerId);
+      if (!pointerDown) { console.log('[INPUT] pointerup rejected - pointerDown was false'); return; }
       // Allow pointer up during WAVE_ACTIVE for rerouting
       const inWave = gameState === GameStates.WAVE_ACTIVE;
       e.preventDefault();
       clearTimeout(longPressTimer);
 
       const cell = pointerStart;
-      if (!cell) { pointerDown = false; pointerStart = null; pointerLastCell = null; return; }
+      console.log('[INPUT] pointerup cell:', cell, 'lastCell:', pointerLastCell);
+      if (!cell) { pointerDown = false; pointerStart = null; pointerLastCell = null; activeTouchId = null; return; }
 
       const moved = pointerLastCell && (
         Math.abs(pointerLastCell.col - pointerStart.col) > 1 ||
         Math.abs(pointerLastCell.row - pointerStart.row) > 1
       );
-
-
+      console.log('[INPUT] pointerup moved:', moved);
 
       if (!moved) {
         const now = Date.now();
 
         if (isPathTile(cell.col, cell.row)) {
-
+          console.log('[INPUT] pointerup removing path tile:', cell);
           removePathTile(cell.col, cell.row, inWave);
         } else if (getCellAt(cell.col, cell.row) === CELL_TYPES.EMPTY) {
-
+          console.log('[INPUT] pointerup placing path tile:', cell);
           placePathTile(cell.col, cell.row, inWave);
         } else if (getCellAt(cell.col, cell.row) === CELL_TYPES.TOWER) {
           const tower = getTowerAt(cell.col, cell.row);
@@ -1437,6 +1454,58 @@
       canvas.addEventListener('click', (e) => {
         // No-op: all canvas interactions (tower tap, path) handled by handlePointerUp/handlePointerMove
       });
+
+      // Fallback: direct touch events on canvas-wrapper (iOS Safari sometimes doesn't fire pointer events on canvas)
+      const canvasWrapper = document.getElementById('canvas-wrapper');
+      if (canvasWrapper) {
+        canvasWrapper.addEventListener('touchstart', (e) => {
+          console.log('[INPUT] canvas-wrapper touchstart:', e.touches.length);
+          // Forward to canvas
+          const touch = e.touches[0];
+          const rect = canvas.getBoundingClientRect();
+          const syntheticEvent = {
+            clientX: touch.clientX,
+            clientY: touch.clientY,
+            pointerId: touch.identifier,
+            pointerType: 'touch',
+            touches: e.touches,
+            preventDefault: () => { e.preventDefault(); }
+          };
+          handlePointerDown(syntheticEvent);
+        }, { passive: false });
+
+        canvasWrapper.addEventListener('touchmove', (e) => {
+          console.log('[INPUT] canvas-wrapper touchmove');
+          const touch = e.touches[0];
+          const syntheticEvent = {
+            clientX: touch.clientX,
+            clientY: touch.clientY,
+            pointerId: touch.identifier,
+            pointerType: 'touch',
+            pointerId: activeTouchId,
+            touches: e.touches,
+            preventDefault: () => { e.preventDefault(); }
+          };
+          handlePointerMove(syntheticEvent);
+        }, { passive: false });
+
+        canvasWrapper.addEventListener('touchend', (e) => {
+          console.log('[INPUT] canvas-wrapper touchend');
+          const touch = e.changedTouches[0];
+          const syntheticEvent = {
+            pointerId: touch.identifier,
+            pointerType: 'touch',
+            changedTouches: e.changedTouches,
+            preventDefault: () => { e.preventDefault(); }
+          };
+          handlePointerUp(syntheticEvent);
+        }, { passive: false });
+
+        canvasWrapper.addEventListener('touchcancel', (e) => {
+          console.log('[INPUT] canvas-wrapper touchcancel');
+          handlePointerCancel({});
+        }, { passive: false });
+      }
     }
 
     // === HUD ===
