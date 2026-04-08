@@ -416,6 +416,15 @@
       ARMORED: { shape: 'large', color: '#aa6644', baseHP: 150, speed: 1.2, reward: 20, armor: 20 },
       BOSS: { shape: 'large', color: '#aa44ff', baseHP: 500, speed: 0.8, reward: 100, isBoss: true, armor: 25 }
     };
+
+    // Power-up constants
+    const POWER_FREEZE_COST = 20;
+    const POWER_NUKE_COST = 35;
+    const POWER_BOOST_COST = 25;
+    const POWER_FREEZE_DUR = 3;
+    const POWER_BOOST_DUR = 5;
+    const POWER_NUKE_DAMAGE = 50;
+
     const WAVE_DEFINITIONS = [
       [{ type: 'SCOUT', count: 5 }],
       [{ type: 'SCOUT', count: 8 }, { type: 'SOLDIER', count: 2 }],
@@ -453,6 +462,17 @@
     let towerRangeTimer = 0;
     let screenShake = { x: 0, y: 0, duration: 0 };
     let tooltipTimer = 0;
+
+    // Power-up state
+    let powerFreezeTimer = 0;
+    let powerBoostTimer = 0;
+    let powerFreezeAvail = true;
+    let powerNukeAvail = true;
+    let powerBoostAvail = true;
+
+    // Visual effect state
+    let powerFlashText = '';
+    let powerFlashTimer = 0;
     let previewTimer = 0;
     const WAVE_PREVIEW_DURATION = 2.0;
 
@@ -464,15 +484,8 @@
     let bestWave = 0;
     let bestScore = 0;
 
-    // Power-up state
-    let powerFreezeTimer = 0;
-    let powerBoostTimer = 0;
+    // Speed multiplier
     let speedMult = 1.0;  // game speed multiplier (0.5 = slow, 1 = normal, 2 = fast)
-    let powerFreezeAvail = true;
-    let powerNukeAvail = true;
-    let powerBoostAvail = true;
-    let powerFlashText = '';
-    let powerFlashTimer = 0;
 
     // Input state
     let pointerDown = false;
@@ -840,10 +853,13 @@
         const dy = targetRow - enemy.row;
         const dist = Math.hypot(dx, dy);
 
+        // Only advance path when actually moving (moveSpeed > 0 means not frozen)
         if (dist < 0.1) {
-          enemy.pathIndex++;
-          enemy.prevCol = enemy.col;
-          enemy.prevRow = enemy.row;
+          if (moveSpeed > 0) {
+            enemy.pathIndex++;
+            enemy.prevCol = enemy.col;
+            enemy.prevRow = enemy.row;
+          }
           if (Math.hypot(enemy.col - BASE_POS.col, enemy.row - BASE_POS.row) < 0.2) {
             const damage = Math.ceil(enemy.maxHP * 0.1);
             baseHP -= damage;
@@ -868,7 +884,7 @@
             }
             continue;
           }
-        } else {
+        } else if (moveSpeed > 0) {
           // Track angle for facing direction
           enemy.angle = Math.atan2(dy, dx);
           enemy.prevCol = enemy.col;
@@ -1194,8 +1210,7 @@
       if (waveEnemyQueue.length === 0 && enemies.length === 0) {
         currentWave++;
         if (currentWave > BASE_WAVES) {
-          // Endless mode — keep going
-          clearPath();
+          // Endless mode — keep going, path persists
           waveSpeedMult = 1 + (currentWave - 10) * 0.03;  // update speed scaling
           currency += WAVE_BONUS;
           gameState = GameStates.PLANNING;
@@ -1277,14 +1292,14 @@
       const y = (screenY - rect.top) * scaleY;
       const col = Math.floor(x / cellSize);
       const row = Math.floor(y / cellSize);
-      console.log('[screenToCell] x:', x, 'y:', y, 'col:', col, 'row:', row);
+      console.log('[INPUT] screenToCell:', { screenX, screenY, rectLeft: Math.round(rect.left), rectTop: Math.round(rect.top), x: Math.round(x), y: Math.round(y), col, row, cellSize, canvasW: canvas.width, canvasH: canvas.height });
       if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return null;
       return { col, row };
     }
 
     function handlePointerDown(e) {
-      console.log('[pointerdown] type:', e.pointerType, 'x:', e.clientX, 'y:', e.clientY, 'gameState:', gameState);
-      if (gameState !== GameStates.PLANNING && gameState !== GameStates.WAVE_ACTIVE) { console.log('[pointerdown] REJECTED: wrong state'); return; }
+
+      if (gameState !== GameStates.PLANNING && gameState !== GameStates.WAVE_ACTIVE) { return; }
       e.preventDefault();
 
       // Reject if this is a mouse event emulated after touch (iOS Safari fix)
@@ -1296,8 +1311,8 @@
       }
 
       const cell = screenToCell(e.clientX, e.clientY);
-      console.log('[pointerdown] cell:', cell);
-      if (!cell) { console.log('[pointerdown] REJECTED: no cell'); return; }
+
+      if (!cell) { return; }
 
       pointerDown = true;
       pointerStart = cell;
@@ -1336,7 +1351,7 @@
       if (!cell) return;
 
       if (pointerLastCell && (cell.col !== pointerLastCell.col || cell.row !== pointerLastCell.row)) {
-        console.log('[pointermove] drawing from', pointerLastCell, 'to', cell);
+
         if (isCellEmpty(cell.col, cell.row) && !isPathTile(cell.col, cell.row)) {
           placePathTile(cell.col, cell.row, true); // duringWave = true for drag
         }
@@ -1345,8 +1360,8 @@
     }
 
     function handlePointerUp(e) {
-      console.log('[pointerup] pointerDown was:', pointerDown);
-      if (!pointerDown) { console.log('[pointerup] REJECTED: not down'); return; }
+
+      if (!pointerDown) { return; }
       // Allow pointer up during WAVE_ACTIVE for rerouting
       const inWave = gameState === GameStates.WAVE_ACTIVE;
       e.preventDefault();
@@ -1360,16 +1375,16 @@
         Math.abs(pointerLastCell.row - pointerStart.row) > 1
       );
 
-      console.log('[pointerup] cell:', cell, 'moved:', moved);
+
 
       if (!moved) {
         const now = Date.now();
 
         if (isPathTile(cell.col, cell.row)) {
-          console.log('[pointerup] removing path tile');
+
           removePathTile(cell.col, cell.row, inWave);
         } else if (getCellAt(cell.col, cell.row) === CELL_TYPES.EMPTY) {
-          console.log('[pointerup] placing path tile');
+
           placePathTile(cell.col, cell.row, inWave);
         } else if (getCellAt(cell.col, cell.row) === CELL_TYPES.TOWER) {
           const tower = getTowerAt(cell.col, cell.row);
@@ -1394,7 +1409,7 @@
     }
 
     function handlePointerCancel(e) {
-      console.log('[pointercancel]');
+
       clearTimeout(longPressTimer);
       pointerDown = false;
       pointerStart = null;
@@ -1818,10 +1833,8 @@
     }
 
     function resumeGame() {
-      console.log('[RESUME] resumeGame called, current state:', gameState);
       hideOverlay();
       gameState = GameStates.WAVE_ACTIVE;
-      console.log('[RESUME] gameState is now:', gameState);
     }
 
     // === RENDERING ===
@@ -2969,13 +2982,7 @@
 
       // Always render regardless of state
       // Game logic updates only when WAVE_ACTIVE (not when PAUSED, PLANNING, MENU, etc.)
-      if (false) { // REMOVED reroute
-        updateWave(dt);
-        updateTowers(dt);
-        updateEnemies(dt);
-        updateProjectiles(dt);
-        updateHUD();
-      } else if (gameState === GameStates.PAUSED) {
+      if (gameState === GameStates.PAUSED) {
         // Frozen - no updates, just keep rendering
       } else if (gameState === GameStates.WAVE_ACTIVE) {
         updateWave(dt);
@@ -3094,9 +3101,7 @@
       document.getElementById('upgrade-btn').addEventListener('touchend', (e) => { e.preventDefault(); document.getElementById('upgrade-btn').click(); });
 
       document.getElementById('clear-btn').addEventListener('click', () => {
-        if (false) { // REMOVED reroute
-          clearPathReroute();
-        } else if (gameState === GameStates.PLANNING || gameState === GameStates.MENU) {
+        if (gameState === GameStates.PLANNING || gameState === GameStates.MENU) {
           clearPath();
         }
       });
@@ -3119,17 +3124,11 @@
       });
 
       pauseBtn.addEventListener('click', () => {
-        if (false) { // REMOVED reroute
-          gameState = GameStates.PAUSED;
-          showOverlay('PAUSED');
-        }
+        // Pause currently disabled
       });
       pauseBtn.addEventListener('touchend', (e) => {
         e.preventDefault();
-        if (false) { // REMOVED reroute
-          gameState = GameStates.PAUSED;
-          showOverlay('PAUSED');
-        }
+        // Pause currently disabled
       });
 
       // Speed toggle button
