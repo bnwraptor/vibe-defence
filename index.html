@@ -280,7 +280,7 @@
   <div id="game-container">
     <div id="hud-top">
       <button id="mute-btn">🔊</button>
-      <span class="wave-display" id="wave-text">WAVE 1/10</span>
+      <span class="wave-display" id="wave-text">WAVE 1</span>
       <span class="hp-display" id="hp-text">HP: ██████░░░░</span>
       <span class="currency-display" id="currency-text">💰 100</span>
       <button id="pause-btn">⏸</button>
@@ -414,7 +414,8 @@
       TANK: { shape: 'large', color: '#888888', baseHP: 200, speed: 1, reward: 25, armor: 15 },
       SPEEDSTER: { shape: 'small', color: '#ff44ff', baseHP: 20, speed: 5, reward: 8, armor: 0 },
       ARMORED: { shape: 'large', color: '#aa6644', baseHP: 150, speed: 1.2, reward: 20, armor: 20 },
-      BOSS: { shape: 'large', color: '#aa44ff', baseHP: 500, speed: 0.8, reward: 100, isBoss: true, armor: 25 }
+      BOSS: { shape: 'large', color: '#aa44ff', baseHP: 500, speed: 0.8, reward: 100, isBoss: true, armor: 25 },
+      MEGABOSS: { shape: 'megaboss', color: '#ff0044', baseHP: 1500, speed: 0.6, reward: 300, isBoss: true, armor: 50 }
     };
 
     const WAVE_DEFINITIONS = [
@@ -441,7 +442,8 @@
     let splashRings = [];  // {col, row, radius, life}
     let hitNumbers = [];       // {x, y, text, color, life, vy}
     let pathTiles = [];
-    let tileBudget = STARTING_TILE_BUDGET;  // total tiles available (accumulates)
+    let tileBudget = STARTING_TILE_BUDGET;  // tiles remaining to spend
+    let totalBudget = STARTING_TILE_BUDGET;  // current max budget (grows with waves)
     let currency = STARTING_CURRENCY;
     let baseHP = BASE_HP;
     let currentWave = 1;
@@ -471,7 +473,12 @@
     // Boss warning effect state
     let bossWarningTimer = 0;
     let bossWarningFlash = 0;
+    let megaBossWarning = false;
 
+    // Storm effect state
+    let stormActive = false;
+    // Armored wave effect state
+    let armoredWave = false;
     // High score state (persisted via localStorage)
     let bestWave = 0;
     let bestScore = 0;
@@ -766,8 +773,11 @@
     // === ENEMIES ===
     function spawnEnemy(type) {
       const typeData = ENEMY_TYPES[type];
-      const hpScale = (1 + (currentWave - 1) * 0.15) * currentDifficulty.enemyHpScale;
-      const speed = typeData.speed * waveSpeedMult * currentDifficulty.enemySpeedScale;
+      const isBossType = type === 'BOSS' || type === 'MEGABOSS';
+      const hpScale = isBossType
+        ? (1 + (currentWave - 10) * 0.25) * currentDifficulty.enemyHpScale
+        : (1 + (currentWave - 1) * 0.15) * currentDifficulty.enemyHpScale;
+      const speed = typeData.speed * waveSpeedMult * currentDifficulty.enemySpeedScale * (stormActive ? 1.2 : 1);
       enemies.push({
         type,
         col: SPAWN_POS.col,
@@ -782,7 +792,7 @@
         color: typeData.color,
         shape: typeData.shape,
         isBoss: typeData.isBoss || false,
-        armor: typeData.armor || 0,
+        armor: (typeData.armor || 0) + (armoredWave ? 10 : 0),
         pathIndex: 0,
         slowTimer: 0,
         deathTimer: 0,
@@ -793,11 +803,12 @@
         bossRotation: 0
       });
       playSpawnSound();
-      if (type === 'BOSS') {
+      if (type === 'BOSS' || type === 'MEGABOSS') {
         bossWarningTimer = 1.5;
         bossWarningFlash = 1.0;
-        screenShake.duration = 0.3;
-        playTone(80, 0.5, 'sawtooth', 0.3);
+        megaBossWarning = type === 'MEGABOSS';
+        screenShake.duration = type === 'MEGABOSS' ? 0.5 : 0.3;
+        playTone(type === 'MEGABOSS' ? 60 : 80, 0.5, 'sawtooth', type === 'MEGABOSS' ? 0.5 : 0.3);
         playTone(60, 0.8, 'sawtooth', 0.2);
       }
     }
@@ -903,7 +914,7 @@
       currency += enemy.reward;
       playDeathSound();
       vibrate();
-      if (enemy.isBoss) screenShake.duration = 0.4;
+      if (enemy.isBoss) screenShake.duration = enemy.type === 'MEGABOSS' ? 0.6 : 0.4;
       updateHUD();
       // Spawn death particles at enemy position
       const cx = (enemy.col + 0.5) * cellSize;
@@ -1120,22 +1131,26 @@
       let bosses = Math.floor(5 * scale);
       let scouts = n >= 15 ? Math.floor(10 * scale) : 0;
 
-      // Every 5th endless wave gets extra bosses
-      if (n % 5 === 0) bosses += Math.floor(n / 5);
+      // Every 5th endless wave gets a MEGA BOSS (15, 20, 25, ...)
+      const isMegaWave = n % 5 === 0;
 
       // Build queue
       const queue = [];
+      // MEGA BOSS spawns first as the opener
+      if (isMegaWave) queue.push('MEGABOSS');
       for (let i = 0; i < scouts; i++) queue.push('SCOUT');
       for (let i = 0; i < soldiers; i++) queue.push('SOLDIER');
       for (let i = 0; i < tanks; i++) queue.push('TANK');
       for (let i = 0; i < speedsters; i++) queue.push('SPEEDSTER');
       for (let i = 0; i < bosses; i++) queue.push('BOSS');
 
-      // Shuffle the queue so enemies don't clump by type
+      // Shuffle the queue so enemies don't clump by type (keep MEGA BOSS first)
+      const megaFirst = queue.shift();
       for (let i = queue.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [queue[i], queue[j]] = [queue[j], queue[i]];
       }
+      if (isMegaWave) queue.unshift(megaFirst);
 
       return queue;
     }
@@ -1166,6 +1181,10 @@
       powerBoostAvail = true;
       powerFreezeTimer = 0;
       powerBoostTimer = 0;
+      // Storm: 15% chance each endless wave (11+)
+      stormActive = currentWave > BASE_WAVES && Math.random() < 0.15;
+      // Armored wave: (wave-10)% chance starting wave 11 (wave 11=1%, wave 20=10%, wave 110=~100%)
+      armoredWave = currentWave > BASE_WAVES && Math.random() < (currentWave - 10) / 100;
       buildWaveQueue();
       spawnTimer = 0;
       previewTimer = WAVE_PREVIEW_DURATION;
@@ -1192,7 +1211,7 @@
       }
 
       if (powerFreezeTimer <= 0) {
-        const effectiveInterval = SPAWN_INTERVAL * currentDifficulty.spawnIntervalMult;
+        const effectiveInterval = SPAWN_INTERVAL * currentDifficulty.spawnIntervalMult / (stormActive ? 1.2 : 1);
         spawnTimer += dt;
         if (spawnTimer >= effectiveInterval && waveEnemyQueue.length > 0) {
           spawnTimer = 0;
@@ -1202,6 +1221,8 @@
 
       if (waveEnemyQueue.length === 0 && enemies.length === 0) {
         currentWave++;
+        stormActive = false;  // reset storm at wave end
+        armoredWave = false;  // reset armored wave at wave end
         if (currentWave > BASE_WAVES) {
           // Endless mode — keep going, path persists
           waveSpeedMult = 1 + (currentWave - 10) * 0.03;  // update speed scaling
@@ -1486,9 +1507,11 @@
     let lastBudgetText = '';
 
     function updateHUD() {
+      const stormStr = stormActive ? ' ⚡' : '';
+      const armoredStr = armoredWave ? ' 🛡️' : '';
       const waveStr = currentWave <= BASE_WAVES
-        ? `WAVE ${currentWave}/${BASE_WAVES}`
-        : `WAVE ${currentWave} 🔁`;
+        ? `WAVE ${currentWave}${stormStr}${armoredStr}`
+        : `WAVE ${currentWave} 🔁${stormStr}${armoredStr}`;
       if (waveStr !== lastWaveText) {
         waveText.textContent = waveStr;
         lastWaveText = waveStr;
@@ -1510,11 +1533,11 @@
       }
 
       const used = pathTiles.length;
-      const budgetStr = `${tileBudget}`;
+      const budgetStr = `${tileBudget}/${totalBudget}`;
       if (budgetStr !== lastBudgetText) {
         budgetText.textContent = budgetStr;
         lastBudgetText = budgetStr;
-        budgetFill.style.width = `${(pathTiles.length / Math.max(tileBudget, 1)) * 100}%`;
+        budgetFill.style.width = `${(pathTiles.length / Math.max(totalBudget, 1)) * 100}%`;
       }
 
     }
@@ -1600,39 +1623,52 @@
       } else if (type === 'HOW_TO_PLAY') {
         overlay.innerHTML = `
           <h1>How to Play</h1>
-          <p class="how-text">Draw a path from SPAWN (green) to BASE (red) by tapping or swiping on empty cells.</p>
-          <p class="how-text">Your towers automatically attack enemies that come within range.</p>
-          <p class="how-text">Enemies that reach the base deal damage. Don't let your HP reach zero!</p>
-          <p class="how-text">Survive all 10 waves to win.</p>
-          <h2 style="color:#fff;font-size:16px;margin:16px 0 8px">Your Towers</h2>
-          <div id="tower-previews" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;max-width:380px;color:#ccc;font-size:11px;text-align:left">
-            <div style="background:#1a1a2e;padding:10px;border-radius:8px;display:flex;align-items:center;gap:10px">
-              <canvas id="preview-turret" width="50" height="50" style="image-rendering:pixelated"></canvas>
-              <div><span style="color:#00ffff;font-weight:bold">TURRET</span><br>Range: 3 &nbsp; DMG: 10 &nbsp; Rate: 0.5s<br><span style="color:#666">Fast firing, balanced</span></div>
+          <p class="how-text">Draw a path SPAWN → BASE. Towers auto-attack enemies in range. Don't let enemies reach BASE!</p>
+          <p class="how-text"><span style="color:#ffd700">Survive 10 waves</span> to win, or push into endless for high scores.</p>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:9px;color:#aaa;max-width:380px;margin:8px 0">
+            <div><span style="color:#44ff44">●</span> SCOUT fast/weak &nbsp;<span style="color:#ffff44">●</span> SOLDIER balanced</div>
+            <div><span style="color:#888">●</span> TANK armored &nbsp;<span style="color:#ff44ff">●</span> SPEEDSTER very fast</div>
+            <div><span style="color:#aa6644">●</span> ARMORED high armor &nbsp;<span style="color:#aa44ff">●</span> BOSS armor 25</div>
+            <div><span style="color:#ff0044">●</span> MEGA BOSS every 5th wave</div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;max-width:380px;color:#ccc;font-size:9px;text-align:left">
+            <div style="background:#1a1a2e;padding:6px;border-radius:6px;display:flex;align-items:center;gap:6px">
+              <canvas id="preview-turret" width="30" height="30" style="image-rendering:pixelated"></canvas>
+              <div><span style="color:#00ffff">TURRET</span> Rng:3 DMG:10 Rate:0.5s<br><span style="color:#666">Fast, hits nearest</span></div>
             </div>
-            <div style="background:#1a1a2e;padding:10px;border-radius:8px;display:flex;align-items:center;gap:10px">
-              <canvas id="preview-cannon" width="50" height="50" style="image-rendering:pixelated"></canvas>
-              <div><span style="color:#ff8800;font-weight:bold">CANNON</span><br>Range: 2 &nbsp; DMG: 40 &nbsp; Rate: 2s<br><span style="color:#ff8800">Splash damage</span></div>
+            <div style="background:#1a1a2e;padding:6px;border-radius:6px;display:flex;align-items:center;gap:6px">
+              <canvas id="preview-cannon" width="30" height="30" style="image-rendering:pixelated"></canvas>
+              <div><span style="color:#ff8800">CANNON</span> Rng:2 DMG:40 Rate:2s<br><span style="color:#ff8800">Splash, hits first</span></div>
             </div>
-            <div style="background:#1a1a2e;padding:10px;border-radius:8px;display:flex;align-items:center;gap:10px">
-              <canvas id="preview-sniper" width="50" height="50" style="image-rendering:pixelated"></canvas>
-              <div><span style="color:#ff4444;font-weight:bold">SNIPER</span><br>Range: 6 &nbsp; DMG: 80 &nbsp; Rate: 3s<br><span style="color:#ff6666">Armor piercing</span></div>
+            <div style="background:#1a1a2e;padding:6px;border-radius:6px;display:flex;align-items:center;gap:6px">
+              <canvas id="preview-sniper" width="30" height="30" style="image-rendering:pixelated"></canvas>
+              <div><span style="color:#ff4444">SNIPER</span> Rng:6 DMG:80 Rate:3s<br><span style="color:#ff6666">Armor piercing!</span></div>
             </div>
-            <div style="background:#1a1a2e;padding:10px;border-radius:8px;display:flex;align-items:center;gap:10px">
-              <canvas id="preview-frost" width="50" height="50" style="image-rendering:pixelated"></canvas>
-              <div><span style="color:#4488ff;font-weight:bold">FROST</span><br>Range: 2.5 &nbsp; DMG: 5 &nbsp; Rate: 1s<br><span style="color:#88aaff">AoE slow aura</span></div>
+            <div style="background:#1a1a2e;padding:6px;border-radius:6px;display:flex;align-items:center;gap:6px">
+              <canvas id="preview-frost" width="30" height="30" style="image-rendering:pixelated"></canvas>
+              <div><span style="color:#4488ff">FROST</span> Rng:2.5 DMG:5 Rate:1s<br><span style="color:#88aaff">AoE slow aura</span></div>
             </div>
           </div>
-          <h2 style="color:#fff;font-size:14px;margin:14px 0 6px">Power-Ups</h2>
-          <div style="display:flex;gap:10px;font-size:11px;color:#aaa">
-            <span>❄ <span style="color:#88aaff">Freeze 20💰</span></span>
-            <span>💥 <span style="color:#ff8800">Nuke 35💰</span></span>
-            <span>⚡ <span style="color:#ffd700">Boost 25💰</span></span>
+
+          <p class="how-text" style="margin-top:8px"><span style="color:#ffd700">Tap tower</span> to select + upgrade (+10% dmg/+6% rate/+5% rng per level). <span style="color:#ffd700">Long-press</span> to cycle targeting: nearest/first/last/weakest/strongest.</p>
+
+          <p class="how-text"><span style="color:#ffd700">During waves</span> you can reroute — place or remove tiles (removing costs 5💰).</p>
+
+          <div style="display:flex;gap:10px;font-size:10px;color:#aaa;margin:8px 0">
+            <span>❄ <span style="color:#88aaff">Freeze 20💰</span> 3s slow</span>
+            <span>💥 <span style="color:#ff8800">Nuke 35💰</span> 50 dmg all</span>
+            <span>⚡ <span style="color:#ffd700">Boost 25💰</span> 2× dmg/rate 5s</span>
           </div>
-          <button class="big-btn" id="overlay-back-btn" style="margin-top:18px">BACK</button>
+
+          <p class="how-text"><span style="color:#aaa">Speed:</span> <span style="color:#ffd700">1× 1.5× 2× 3× 5×</span> — tap the speed button top-right. <span style="color:#aaa">Endless:</span> enemies +20% HP, +3% speed/wave. Bosses +25% HP/wave.</p>
+
+          <p class="how-text"><span style="color:#aaa">Score:</span> currency + waves × 100. Good luck!</p>
+
+          <button class="big-btn" id="overlay-back-btn" style="margin-top:12px">BACK</button>
         `;
 
-        // Draw tower previews after overlay is built
         requestAnimationFrame(() => {
           drawTowerPreview('preview-turret', 'TURRET', '#00ffff');
           drawTowerPreview('preview-cannon', 'CANNON', '#ff8800');
@@ -1693,16 +1729,15 @@
     }
 
     function startGame() {
-      hideOverlay();
+      restartGame();
       gameState = GameStates.PLANNING;
-      // Require at least one path tile to be placed before starting a wave
       setStartButton(pathTiles.length > 0);
       updateBuyHpButton();
       updatePowerButtons();
     }
 
     function clearPath() {
-      // Remove all path tiles and refund their cost back to budget
+      // Remove all path tiles and restore budget
       for (const tile of pathTiles) {
         grid[tile.row][tile.col] = CELL_TYPES.EMPTY;
         tileBudget++;
@@ -1716,24 +1751,28 @@
 
     function resetPathBudget() {
       // Tile budget progression (after each wave completes):
-      // Wave 1 (start): 20 | Wave 1 complete: +7 → 27
-      // Wave 2 complete: +7 → 34 | Wave 3: 41 | Wave 4: 48
-      // Wave 5: 55 | Wave 6: 62 | Wave 7: 69 | Wave 8: 76
-      // Wave 9 complete: +4 → 80 | Wave 10: cap 80
-      // Waves 11+: +2 each → capped at 110
+      // Wave 1 start: 20 | Wave 1 complete: +7 → 27 | Wave 2: +7 → 34
+      // Wave 3: 41 | Wave 4: 48 | Wave 5: 55 | Wave 6: 62 | Wave 7: 69 | Wave 8: 76
+      // Wave 9 complete: +4 → 80 | Wave 10: +7 → 87 (cap 80 still applies)
+      // Endless 11+: +2/wave from 80 → 110 cap at wave 27
       if (tileBudget >= MAX_TILE_BUDGET) { updateHUD(); return; }
-      if (currentWave === BASE_WAVES) {
-        // Wave 10: no accumulation
-      } else if (currentWave > BASE_WAVES) {
-        const target = 80 + (currentWave - BASE_WAVES) * TILE_ACCUM_ENDLESS;
-        tileBudget = Math.min(target, MAX_TILE_BUDGET);
+      let newTotal = totalBudget;
+      if (currentWave > BASE_WAVES) {
+        // Endless: +2 per wave from base of 80
+        newTotal = Math.min(80 + (currentWave - BASE_WAVES) * TILE_ACCUM_ENDLESS, MAX_TILE_BUDGET);
+      } else if (currentWave === BASE_WAVES) {
+        // Wave 10 complete: +7 → 80 (base waves cap at 80 until endless)
+        newTotal = Math.min(totalBudget + TILE_ACCUM_WAVES, 80);
       } else if (currentWave === BASE_WAVES - 1) {
-        // Wave 9 complete: +4 → reaches 80
-        tileBudget = Math.min(tileBudget + TILE_WAVE9_BONUS, MAX_TILE_BUDGET);
+        // Wave 9 complete: +4 → 80
+        newTotal = Math.min(totalBudget + TILE_WAVE9_BONUS, MAX_TILE_BUDGET);
       } else {
         // Waves 1-8: +7 per completed wave
-        tileBudget = Math.min(tileBudget + TILE_ACCUM_WAVES, MAX_TILE_BUDGET);
+        newTotal = Math.min(totalBudget + TILE_ACCUM_WAVES, MAX_TILE_BUDGET);
       }
+      // tileBudget gets the net gain so player's remaining tiles also grow
+      tileBudget += (newTotal - totalBudget);
+      totalBudget = newTotal;
       updateHUD();
     }
 
@@ -1847,6 +1886,7 @@
     function restartGame() {
       clearPath();
       tileBudget = STARTING_TILE_BUDGET;
+      totalBudget = STARTING_TILE_BUDGET;
       currency = currentDifficulty.startCurrency;
       baseHP = currentDifficulty.startHp;
       currentWave = 1;
@@ -1954,15 +1994,16 @@
           ctx.font = `bold ${fontSize}px sans-serif`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillStyle = '#ff0000';
-          ctx.shadowColor = '#ff0000';
+          ctx.fillStyle = megaBossWarning ? '#ff0044' : '#ff0000';
+          ctx.shadowColor = megaBossWarning ? '#ff0044' : '#ff0000';
           ctx.shadowBlur = 20;
           // Scale down until text fits
-          while (ctx.measureText('⚠ BOSS INCOMING ⚠').width > maxWidth && fontSize > 16) {
+          const warningText = megaBossWarning ? '⚠ MEGA BOSS INCOMING ⚠' : '⚠ BOSS INCOMING ⚠';
+          while (ctx.measureText(warningText).width > maxWidth && fontSize > 16) {
             fontSize -= 2;
             ctx.font = `bold ${fontSize}px sans-serif`;
           }
-          ctx.fillText('⚠ BOSS INCOMING ⚠', canvas.width/2, canvas.height/2);
+          ctx.fillText(warningText, canvas.width/2, canvas.height/2);
           ctx.restore();
         }
       }
@@ -2603,7 +2644,7 @@
         // Boss pulsing glow
         if (enemy.isBoss) {
           const pulse = Math.sin(Date.now() / 200) * 0.3 + 0.7;
-          ctx.shadowColor = '#aa44ff';
+          ctx.shadowColor = enemy.type === 'MEGABOSS' ? '#ff0044' : '#aa44ff';
           ctx.shadowBlur = 20 + pulse * 15;
         } else {
           ctx.shadowColor = enemy.color;
@@ -2869,6 +2910,64 @@
           ctx.fill();
           ctx.shadowBlur = 0;
         }
+      } else if (type === 'MEGABOSS') {
+        // Larger, darker red mega boss with double crown spikes and dark aura
+        const megaRadius = radius * 1.2;
+        ctx.shadowColor = '#ff0044';
+        ctx.shadowBlur = 30;
+        ctx.beginPath();
+        ctx.arc(0, 0, megaRadius, 0, Math.PI * 2);
+        ctx.fillStyle = bodyColor;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        if (!isTrail) {
+          // Dark aura ring
+          ctx.save();
+          ctx.rotate(bossRotation || 0);
+          const spikeCount = 12;
+          ctx.fillStyle = darkenColor(bodyColor, 0.3);
+          for (let s = 0; s < spikeCount; s++) {
+            const a = (s / spikeCount) * Math.PI * 2;
+            ctx.save();
+            ctx.rotate(a);
+            ctx.beginPath();
+            ctx.moveTo(megaRadius * 0.7, 0);
+            ctx.lineTo(megaRadius * 1.3, -megaRadius * 0.12);
+            ctx.lineTo(megaRadius * 1.3, megaRadius * 0.12);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+          }
+          ctx.restore();
+
+          // Inner skull-like pattern
+          ctx.save();
+          ctx.rotate((bossRotation || 0) * 0.5);
+          ctx.fillStyle = darkenColor(bodyColor, 0.5);
+          ctx.beginPath();
+          ctx.arc(0, 0, megaRadius * 0.6, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#ff4444';
+          ctx.beginPath();
+          ctx.arc(-megaRadius * 0.2, -megaRadius * 0.1, megaRadius * 0.15, 0, Math.PI * 2);
+          ctx.arc(megaRadius * 0.2, -megaRadius * 0.1, megaRadius * 0.15, 0, Math.PI * 2);
+          ctx.fill();
+          // Jaw
+          ctx.fillStyle = darkenColor(bodyColor, 0.5);
+          ctx.beginPath();
+          ctx.arc(0, megaRadius * 0.25, megaRadius * 0.3, 0, Math.PI);
+          ctx.fill();
+          ctx.restore();
+
+          // Pulsing danger ring
+          const pulse = Math.sin(Date.now() / 100) * 0.3 + 0.7;
+          ctx.strokeStyle = `rgba(255, 0, 68, ${pulse})`;
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(0, 0, megaRadius * 1.35, 0, Math.PI * 2);
+          ctx.stroke();
+        }
       }
     }
 
@@ -2964,31 +3063,48 @@
 
       const lines = getWavePreviewLines();
       const centerX = canvas.width / 2;
-      const waveY = canvas.height / 2 - (lines.length + 1) * cellSize * 1.4;
+      const availableH = canvas.height * 0.85;
+      const waveLabelH = canvas.width * 0.1;
+      const lineH = canvas.width * 0.05 * 1.8;
+      const totalContentH = waveLabelH + lines.length * lineH;
+      const startY = (canvas.height - totalContentH) / 2;
 
-      // Wave label — large, centered
+      // Wave label — scale to fit canvas width
       ctx.fillStyle = '#ffffff';
-      ctx.font = `bold ${cellSize * 2}px -apple-system, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.shadowColor = '#4ade80';
       ctx.shadowBlur = 20;
-      const waveLabel = currentWave <= BASE_WAVES ? `WAVE ${currentWave}` : `WAVE ${currentWave} ∞`;
-      ctx.fillText(waveLabel, centerX, waveY);
+      const waveLabel = (currentWave <= BASE_WAVES ? `WAVE ${currentWave}` : `WAVE ${currentWave} ∞`) + (stormActive ? ' — ⚡ STORM' : '') + (armoredWave ? ' — 🛡️ ARMORED' : '');
+      const maxWaveW = canvas.width * 0.85;
+      let waveFontSize = canvas.width * 0.1;
+      ctx.font = `bold ${waveFontSize}px -apple-system, sans-serif`;
+      while (ctx.measureText(waveLabel).width > maxWaveW && waveFontSize > 10) {
+        waveFontSize -= 2;
+        ctx.font = `bold ${waveFontSize}px -apple-system, sans-serif`;
+      }
+      ctx.fillText(waveLabel, centerX, startY);
       ctx.shadowBlur = 0;
 
-      // Enemy count lines
-      ctx.font = `bold ${cellSize * 0.9}px -apple-system, sans-serif`;
+      // Enemy count lines — scale font to fit
+      const maxLineW = canvas.width * 0.85;
+      let lineFontSize = canvas.width * 0.05;
+      ctx.font = `bold ${lineFontSize}px -apple-system, sans-serif`;
+      const sampleLine = lines[0] ? lines[0].text : 'SCOUT x5';
+      while (ctx.measureText(sampleLine).width > maxLineW && lineFontSize > 8) {
+        lineFontSize -= 1;
+        ctx.font = `bold ${lineFontSize}px -apple-system, sans-serif`;
+      }
       lines.forEach((line, i) => {
-        const y = waveY + (i + 1) * cellSize * 1.4;
+        const y = startY + (i + 1) * lineFontSize * 1.8;
         const textWidth = ctx.measureText(line.text).width;
 
         // Color dot indicator
         ctx.fillStyle = line.color;
         ctx.shadowColor = line.color;
-        ctx.shadowBlur = 8;
+        ctx.shadowBlur = 6;
         ctx.beginPath();
-        ctx.arc(centerX - textWidth / 2 - cellSize * 0.5, y, cellSize * 0.25, 0, Math.PI * 2);
+        ctx.arc(centerX - textWidth / 2 - lineFontSize * 1.2, y, lineFontSize * 0.6, 0, Math.PI * 2);
         ctx.fill();
         ctx.shadowBlur = 0;
 
@@ -3001,7 +3117,7 @@
       const barWidth = canvas.width * 0.5;
       const barHeight = 6;
       const barX = (canvas.width - barWidth) / 2;
-      const barY = canvas.height / 2 + (lines.length + 1.5) * cellSize * 1.4;
+      const barY = canvas.height / 2 + (lines.length + 1.5) * lineFontSize * 1.8;
       const progress = previewTimer / WAVE_PREVIEW_DURATION;
 
       ctx.fillStyle = 'rgba(255,255,255,0.15)';
