@@ -441,6 +441,7 @@
     let deathParticles = [];  // {x, y, vx, vy, color, size, life, maxLife}
     let splashRings = [];  // {col, row, radius, life}
     let hitNumbers = [];       // {x, y, text, color, life, vy}
+    let goldPickups = [];    // {x, y, text, life, vy}
     let pathTiles = [];
     let tileBudget = STARTING_TILE_BUDGET;  // tiles remaining to spend
     let totalBudget = STARTING_TILE_BUDGET;  // current max budget (grows with waves)
@@ -651,16 +652,33 @@
     }
 
     // === TOWERS ===
+    // Tower spots — candidate positions spread across the grid, avoiding SPAWN (0,7) and BASE (11,7)
+    const TOWER_SPOTS = [
+      { col: 3, row: 3 }, { col: 6, row: 5 }, { col: 9, row: 4 },
+      { col: 2, row: 10 }, { col: 8, row: 11 }, { col: 5, row: 13 },
+      { col: 10, row: 9 }, { col: 4, row: 2 }, { col: 7, row: 6 },
+      { col: 1, row: 14 }, { col: 9, row: 14 }, { col: 3, row: 6 }
+    ];
+
     function initTowers() {
-      towers = [
-        { type: 'TURRET', col: 3, row: 3 },
-        { type: 'TURRET', col: 6, row: 5 },
-        { type: 'CANNON', col: 9, row: 4 },
-        { type: 'SNIPER', col: 2, row: 10 },
-        { type: 'FROST', col: 8, row: 11 },
-        { type: 'CANNON', col: 5, row: 13 },
-        { type: 'SNIPER', col: 10, row: 9 }
-      ];
+      // Shuffle TOWER_SPOTS using Fisher-Yates
+      const pool = TOWER_SPOTS.slice();
+      for (let i = pool.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const tmp = pool[i];
+        pool[i] = pool[j];
+        pool[j] = tmp;
+      }
+      const chosenSpots = pool.slice(0, 7);
+      // Shuffle tower types independently
+      const types = ['TURRET', 'TURRET', 'CANNON', 'SNIPER', 'FROST', 'CANNON', 'SNIPER'];
+      for (let i = types.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const tmp = types[i];
+        types[i] = types[j];
+        types[j] = tmp;
+      }
+      towers = chosenSpots.map((spot, i) => ({ type: types[i], col: spot.col, row: spot.row }));
       for (const t of towers) {
         const typeData = TOWER_TYPES[t.type];
         t.color = typeData.color;
@@ -797,6 +815,7 @@
         slowTimer: 0,
         deathTimer: 0,
         dying: false,
+        spawnAnim: 1.0,
         // Trail positions for speed effect
         trail: [],
         // Boss rotation timer
@@ -830,6 +849,11 @@
 
         if (enemy.slowTimer > 0) {
           enemy.slowTimer -= dt;
+        }
+        // Spawn scale-in animation
+        if (enemy.spawnAnim > 0) {
+          enemy.spawnAnim -= dt * 3;
+          if (enemy.spawnAnim < 0) enemy.spawnAnim = 0;
         }
 
         const speedMod = (enemy.slowTimer > 0 ? 0.5 : 1) * (powerFreezeTimer > 0 ? 0 : 1);
@@ -916,6 +940,14 @@
       vibrate();
       if (enemy.isBoss) screenShake.duration = enemy.type === 'MEGABOSS' ? 0.6 : 0.4;
       updateHUD();
+      // Gold pickup floating text
+      goldPickups.push({
+        x: (enemy.col + 0.5) * cellSize,
+        y: (enemy.row + 0.5) * cellSize,
+        text: `+${enemy.reward}💰`,
+        life: 1.0,
+        vy: -cellSize * 1.5
+      });
       // Spawn death particles at enemy position
       const cx = (enemy.col + 0.5) * cellSize;
       const cy = (enemy.row + 0.5) * cellSize;
@@ -1117,6 +1149,30 @@
         ctx.shadowBlur = 0;
       }
       ctx.globalAlpha = 1;
+    }
+    function updateGoldPickups(dt) {
+      for (let i = goldPickups.length - 1; i >= 0; i--) {
+        const g = goldPickups[i];
+        g.y += g.vy * dt;
+        g.life -= dt;
+        if (g.life <= 0) goldPickups.splice(i, 1);
+      }
+    }
+    function drawGoldPickups() {
+      for (const g of goldPickups) {
+        const alpha = Math.min(g.life * 2, 1);
+        const size = Math.round(cellSize * 0.35);
+        ctx.globalAlpha = alpha;
+        ctx.font = `bold ${size}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor = '#ffd700';
+        ctx.shadowBlur = 8;
+        ctx.fillStyle = '#ffd700';
+        ctx.fillText(g.text, g.x, g.y);
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = 1;
+      }
     }
     // === WAVE SYSTEM ===
     function generateWave(n) {
@@ -1953,6 +2009,7 @@
       drawDeathParticles();
       drawSplashRings();
       drawHitNumbers();
+      drawGoldPickups();
       drawSpawnAndBase();
 
       if (flashTiles.length > 0) {
@@ -2550,6 +2607,9 @@
         if (enemy.shape === 'large') radius = cellSize * 0.46;
         if (enemy.isBoss) radius = cellSize * 0.55;
 
+        // Spawn scale-in animation
+        const spawnScale = enemy.spawnAnim !== undefined ? Math.max(0.01, 1 - enemy.spawnAnim) : 1;
+
         if (enemy.dying) {
           // Expanding white circle death flash
           const scale = 1 + (enemy.deathTimer / 0.15) * 1.5;
@@ -2640,6 +2700,7 @@
         ctx.save();
         ctx.translate(cx, cy);
         ctx.rotate(enemy.angle || 0);
+        if (spawnScale < 1) ctx.scale(spawnScale, spawnScale);
 
         // Boss pulsing glow
         if (enemy.isBoss) {
@@ -2990,21 +3051,22 @@
 
     function drawProjectiles() {
       for (const proj of projectiles) {
+        const px = proj.col * cellSize;
+        const py = proj.row * cellSize;
         for (let i = 0; i < proj.trail.length; i++) {
           const t = proj.trail[i];
-          ctx.fillStyle = proj.color;
           ctx.globalAlpha = 0.3 - i * 0.1;
+          ctx.fillStyle = proj.color;
           ctx.beginPath();
-          ctx.arc((t.col) * cellSize, (t.row) * cellSize, 3, 0, Math.PI * 2);
+          ctx.arc(t.col * cellSize, t.row * cellSize, 3, 0, Math.PI * 2);
           ctx.fill();
         }
         ctx.globalAlpha = 1;
-
         ctx.fillStyle = proj.color;
         ctx.shadowColor = proj.color;
         ctx.shadowBlur = 8;
         ctx.beginPath();
-        ctx.arc(proj.col * cellSize, proj.row * cellSize, 5, 0, Math.PI * 2);
+        ctx.arc(px, py, 5, 0, Math.PI * 2);
         ctx.fill();
         ctx.shadowBlur = 0;
       }
@@ -3171,6 +3233,7 @@
       updateDeathParticles(realDt);
       updateSplashRings(realDt);
       updateHitNumbers(realDt);
+      updateGoldPickups(realDt);
 
       // Power-up timers (use realDt so button availability shows in real time)
       if (powerFreezeTimer > 0) powerFreezeTimer -= realDt;
