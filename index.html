@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Vibe Defence — Path Architect</title>
-  <script async src="https://jam.pieter.com/2026/widget.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body {
@@ -38,6 +37,7 @@
       text-transform: uppercase;
       letter-spacing: 1px;
       flex-shrink: 0;
+      contain: layout paint style;
     }
     #hud-top .hp-display { color: #ff4444; }
     #hud-top .wave-display { color: #aaa; }
@@ -63,6 +63,7 @@
       max-width: 500px;
       padding: 8px 12px 16px;
       flex-shrink: 0;
+      contain: layout paint style;
     }
     #budget-bar {
       width: 100%;
@@ -87,12 +88,17 @@
       background: #1a1a2e;
       border-radius: 4px;
       overflow: hidden;
+      position: relative;
     }
     #budget-fill {
+      width: 100%;
       height: 100%;
       background: linear-gradient(90deg, #4a4a6a, #6a6a8a);
       border-radius: 4px;
-      transition: width 0.15s ease;
+      transform-origin: left center;
+      transform: scaleX(0);
+      will-change: transform;
+      transition: transform 0.15s ease;
     }
     #start-btn {
       background: rgba(45,106,79,0.3);
@@ -409,6 +415,12 @@
     const SPAWN_INTERVAL = 0.8;
     const WAVE_DELAY = 3;
     const PROJ_SPEED = 480;
+    const ENEMY_POOL_SIZE = 256;
+    const PROJECTILE_POOL_SIZE = 256;
+    const PARTICLE_POOL_SIZE = 500;
+    const HIT_NUMBER_POOL_SIZE = 256;
+    const PARTICLE_SHAPE_CIRCLE = 0;
+    const PARTICLE_SHAPE_SQUARE = 1;
     const ICE_BOMB_SPLASH_MULT = 1.5;
     const ICE_BOMB_SPLASH_RADIUS = 2;
     const ICE_BOMB_SLOW_MULT = 0.2;
@@ -430,6 +442,64 @@
       MEGABOSS: { shape: 'megaboss', color: '#ff0044', baseHP: 1500, speed: 0.6, reward: 300, isBoss: true, armor: 50 }
     };
 
+    function createPool(size, factory) {
+      const pool = Array.from({ length: size }, () => {
+        const item = factory();
+        item.active = false;
+        return item;
+      });
+      pool.activeCount = 0;
+      return pool;
+    }
+
+    function acquireFromPool(pool) {
+      for (let i = 0; i < pool.length; i++) {
+        const item = pool[i];
+        if (!item.active) {
+          item.active = true;
+          pool.activeCount++;
+          return item;
+        }
+      }
+      return null;
+    }
+
+    function releaseToPool(pool, item, reset) {
+      if (!item || !item.active) return;
+      item.active = false;
+      if (reset) reset(item);
+      pool.activeCount = Math.max(0, pool.activeCount - 1);
+    }
+
+    function resetPool(pool, reset) {
+      for (const item of pool) {
+        item.active = false;
+        if (reset) reset(item);
+      }
+      pool.activeCount = 0;
+    }
+
+    function resetEnemyObject(enemy) {
+      enemy.dying = false;
+      enemy.deathTimer = 0;
+      enemy.hitFlashFrames = 0;
+      enemy.slowTimer = 0;
+      enemy.slowMult = 1;
+      enemy.stunTimer = 0;
+      enemy.spawnAnim = 0;
+      enemy.trail.length = 0;
+    }
+
+    function resetProjectileObject(proj) {
+      proj.target = null;
+      proj.phase = null;
+      proj.trail.length = 0;
+    }
+
+    function resetHitNumberObject(hit) {
+      hit.text = '';
+    }
+
     const WAVE_DEFINITIONS = [
       [{ type: 'SCOUT', count: 5 }],
       [{ type: 'SCOUT', count: 8 }, { type: 'SOLDIER', count: 2 }],
@@ -449,12 +519,23 @@
     let grid = [];
     let terrainGrid = [];
     let towers = [];
-    let enemies = [];
-    let projectiles = [];
-    let deathParticles = [];  // {x, y, vx, vy, color, size, life, maxLife}
+    let enemies = createPool(ENEMY_POOL_SIZE, function() { return { trail: [] }; });
+    let projectiles = createPool(PROJECTILE_POOL_SIZE, function() { return { trail: [] }; });
+    const enemySpatialBuckets = Array.from({ length: ROWS * COLS }, function() { return []; });
+    const deathParticleActive = new Uint8Array(PARTICLE_POOL_SIZE);
+    const deathParticleX = new Float32Array(PARTICLE_POOL_SIZE);
+    const deathParticleY = new Float32Array(PARTICLE_POOL_SIZE);
+    const deathParticleVX = new Float32Array(PARTICLE_POOL_SIZE);
+    const deathParticleVY = new Float32Array(PARTICLE_POOL_SIZE);
+    const deathParticleSize = new Float32Array(PARTICLE_POOL_SIZE);
+    const deathParticleLife = new Float32Array(PARTICLE_POOL_SIZE);
+    const deathParticleMaxLife = new Float32Array(PARTICLE_POOL_SIZE);
+    const deathParticleShape = new Uint8Array(PARTICLE_POOL_SIZE);
+    const deathParticleColor = new Array(PARTICLE_POOL_SIZE).fill('#ffffff');
+    let deathParticleActiveCount = 0;
     let splashRings = [];  // {col, row, radius, life}
     let towerSynergies = [];
-    let hitNumbers = [];       // {x, y, text, color, life, vy}
+    let hitNumbers = createPool(HIT_NUMBER_POOL_SIZE, function() { return {}; });       // {x, y, text, color, life, vy}
     let goldPickups = [];    // {x, y, text, life, vy}
     let pathTiles = [];
     let tileBudget = STARTING_TILE_BUDGET;  // tiles remaining to spend
@@ -511,6 +592,13 @@
     // DOM elements
     const canvas = document.getElementById('game');
     const ctx = canvas.getContext('2d');
+    const lightCanvas = document.createElement('canvas');
+    const lightCtx = lightCanvas.getContext('2d');
+    const staticSceneCanvas = document.createElement('canvas');
+    const staticSceneCtx = staticSceneCanvas.getContext('2d');
+    const glowSpriteCache = new Map();
+    let staticSceneReady = false;
+    let bossWarningGradient = null;
     const waveText = document.getElementById('wave-text');
     const hpText = document.getElementById('hp-text');
     const currencyText = document.getElementById('currency-text');
@@ -524,7 +612,7 @@
     const tooltip = document.getElementById('tooltip');
 
     let cellSize = 0;
-    let dpr = window.devicePixelRatio || 1;
+    let dpr = Math.min(window.devicePixelRatio || 1, 2.0);
 
     // === GRID ===
     function initGrid() {
@@ -655,6 +743,7 @@
       playPlaceSound();
       flashTile(col, row, '#4a4a6a', 100);
       updateHUD();
+      invalidateStaticScene();
       if (gameState === GameStates.PLANNING) setStartButton(true);
       return true;
     }
@@ -667,6 +756,7 @@
       grid[row][col] = CELL_TYPES.EMPTY;
       playRemoveSound();
       updateHUD();
+      invalidateStaticScene();
       if (gameState === GameStates.PLANNING) setStartButton(pathTiles.length > 0);
       return true;
     }
@@ -916,10 +1006,13 @@
     }
 
     function isTowerNearTerrainType(tower, terrainType) {
+      const maxDistSq = 1.5 * 1.5;
       for (let row = tower.row - 1; row <= tower.row + 1; row++) {
         for (let col = tower.col - 1; col <= tower.col + 1; col++) {
           if (getTerrainAt(col, row) !== terrainType) continue;
-          if (Math.hypot(col - tower.col, row - tower.row) <= 1.5) {
+          const dx = col - tower.col;
+          const dy = row - tower.row;
+          if (dx * dx + dy * dy <= maxDistSq) {
             return true;
           }
         }
@@ -944,35 +1037,75 @@
       return { col: tower.col + 0.5, row: tower.row + 0.5 };
     }
 
-    function getTowerToEnemyDistance(tower, enemy) {
-      const towerPos = getTowerCenter(tower);
-      return Math.hypot(enemy.col + 0.5 - towerPos.col, enemy.row + 0.5 - towerPos.row);
+    function getTowerToEnemyDistanceSq(tower, enemy) {
+      const dx = enemy.col - tower.col;
+      const dy = enemy.row - tower.row;
+      return dx * dx + dy * dy;
+    }
+
+    function clearEnemySpatialGrid() {
+      for (const bucket of enemySpatialBuckets) bucket.length = 0;
+    }
+
+    function addEnemyToSpatialGrid(enemy) {
+      const col = Math.max(0, Math.min(COLS - 1, Math.floor(enemy.col)));
+      const row = Math.max(0, Math.min(ROWS - 1, Math.floor(enemy.row)));
+      enemy.spatialCol = col;
+      enemy.spatialRow = row;
+      enemySpatialBuckets[row * COLS + col].push(enemy);
+    }
+
+    function getEnemiesNearPoint(centerCol, centerRow, range, predicate) {
+      const rangeSq = range * range;
+      const minCol = Math.max(0, Math.floor(centerCol + 0.5 - range));
+      const maxCol = Math.min(COLS - 1, Math.floor(centerCol + 0.5 + range));
+      const minRow = Math.max(0, Math.floor(centerRow + 0.5 - range));
+      const maxRow = Math.min(ROWS - 1, Math.floor(centerRow + 0.5 + range));
+      const inRange = [];
+
+      for (let row = minRow; row <= maxRow; row++) {
+        for (let col = minCol; col <= maxCol; col++) {
+          const bucket = enemySpatialBuckets[row * COLS + col];
+          for (let i = 0; i < bucket.length; i++) {
+            const enemy = bucket[i];
+            if (!enemy.active || enemy.dying) continue;
+            if (predicate && !predicate(enemy)) continue;
+            const dx = enemy.col - centerCol;
+            const dy = enemy.row - centerRow;
+            const distSq = dx * dx + dy * dy;
+            if (distSq <= rangeSq) inRange.push(enemy);
+          }
+        }
+      }
+
+      return inRange;
     }
 
     function getEnemiesInRange(tower, rangeOverride) {
       const range = rangeOverride !== undefined ? rangeOverride : getTowerEffectiveRange(tower);
-      return enemies.filter(enemy => !enemy.dying && canTowerLockEnemy(enemy) && getTowerToEnemyDistance(tower, enemy) <= range);
+      return getEnemiesNearPoint(tower.col, tower.row, range, canTowerLockEnemy);
     }
 
     function compareTargetsForTower(tower, a, b) {
+      const distDelta = getTowerToEnemyDistanceSq(tower, a) - getTowerToEnemyDistanceSq(tower, b);
       const mode = tower.targeting || 'nearest';
       switch (mode) {
         case 'first':
-          return b.pathIndex - a.pathIndex || getTowerToEnemyDistance(tower, a) - getTowerToEnemyDistance(tower, b);
+          return b.pathIndex - a.pathIndex || distDelta;
         case 'last':
-          return a.pathIndex - b.pathIndex || getTowerToEnemyDistance(tower, a) - getTowerToEnemyDistance(tower, b);
+          return a.pathIndex - b.pathIndex || distDelta;
         case 'weakest':
-          return a.hp - b.hp || getTowerToEnemyDistance(tower, a) - getTowerToEnemyDistance(tower, b);
+          return a.hp - b.hp || distDelta;
         case 'strongest':
-          return b.hp - a.hp || getTowerToEnemyDistance(tower, a) - getTowerToEnemyDistance(tower, b);
+          return b.hp - a.hp || distDelta;
         case 'nearest':
         default:
-          return getTowerToEnemyDistance(tower, a) - getTowerToEnemyDistance(tower, b);
+          return distDelta;
       }
     }
 
     function selectTargetForTower(tower, candidates) {
-      const inRange = (candidates || getEnemiesInRange(tower)).filter(enemy => !enemy.dying && canTowerLockEnemy(enemy));
+      const inRange = (candidates || getEnemiesInRange(tower)).filter(enemy => enemy.active && !enemy.dying && canTowerLockEnemy(enemy));
       if (!inRange.length) return null;
       return inRange.slice().sort((a, b) => compareTargetsForTower(tower, a, b))[0];
     }
@@ -983,12 +1116,8 @@
     }
 
     function selectSynergyTarget(cannon, frost) {
-      const sharedEnemies = enemies.filter(enemy => {
-        if (enemy.dying) return false;
-        if (!canTowerLockEnemy(enemy)) return false;
-        return getTowerToEnemyDistance(cannon, enemy) <= getTowerEffectiveRange(cannon)
-          && getTowerToEnemyDistance(frost, enemy) <= getTowerEffectiveRange(frost);
-      });
+      const frostRangeSq = Math.pow(getTowerEffectiveRange(frost), 2);
+      const sharedEnemies = getEnemiesInRange(cannon).filter(enemy => getTowerToEnemyDistanceSq(frost, enemy) <= frostRangeSq);
       if (!sharedEnemies.length) return null;
 
       const cannonRanks = getTargetRanks(cannon, sharedEnemies);
@@ -1008,17 +1137,18 @@
       const frosts = towers.filter(tower => tower.type === 'FROST');
 
       for (const cannon of cannons) {
-        const cannonPos = getTowerCenter(cannon);
         for (const frost of frosts) {
-          const frostPos = getTowerCenter(frost);
-          const distance = Math.hypot(frostPos.col - cannonPos.col, frostPos.row - cannonPos.row);
-          if (distance <= getTowerEffectiveRange(cannon) + getTowerEffectiveRange(frost)) {
-            overlapCandidates.push({ cannon, frost, distance });
+          const dx = frost.col - cannon.col;
+          const dy = frost.row - cannon.row;
+          const distanceSq = dx * dx + dy * dy;
+          const overlapRange = getTowerEffectiveRange(cannon) + getTowerEffectiveRange(frost);
+          if (distanceSq <= overlapRange * overlapRange) {
+            overlapCandidates.push({ cannon, frost, distanceSq });
           }
         }
       }
 
-      overlapCandidates.sort((a, b) => a.distance - b.distance);
+      overlapCandidates.sort((a, b) => a.distanceSq - b.distanceSq);
       const paired = new Set();
       return overlapCandidates.filter(link => {
         if (paired.has(link.cannon) || paired.has(link.frost)) return false;
@@ -1058,13 +1188,68 @@
       tower.recoil = 1.0;
     }
 
+    function spawnProjectile(data) {
+      const proj = acquireFromPool(projectiles);
+      if (!proj) return null;
+      resetProjectileObject(proj);
+      Object.assign(proj, data);
+      return proj;
+    }
+
+    function despawnProjectile(proj) {
+      releaseToPool(projectiles, proj, resetProjectileObject);
+    }
+
+    function spawnDeathParticle(data) {
+      for (let i = 0; i < PARTICLE_POOL_SIZE; i++) {
+        if (deathParticleActive[i]) continue;
+        deathParticleActive[i] = 1;
+        deathParticleX[i] = data.x;
+        deathParticleY[i] = data.y;
+        deathParticleVX[i] = data.vx;
+        deathParticleVY[i] = data.vy;
+        deathParticleSize[i] = data.size;
+        deathParticleLife[i] = data.life;
+        deathParticleMaxLife[i] = data.maxLife || data.life || 1;
+        deathParticleColor[i] = data.color || '#ffffff';
+        deathParticleShape[i] = data.shape === 'square' ? PARTICLE_SHAPE_SQUARE : PARTICLE_SHAPE_CIRCLE;
+        deathParticleActiveCount++;
+        return i;
+      }
+      return -1;
+    }
+
+    function despawnDeathParticle(index) {
+      if (!deathParticleActive[index]) return;
+      deathParticleActive[index] = 0;
+      deathParticleLife[index] = 0;
+      deathParticleShape[index] = PARTICLE_SHAPE_CIRCLE;
+      deathParticleActiveCount = Math.max(0, deathParticleActiveCount - 1);
+    }
+
+    function resetDeathParticles() {
+      deathParticleActive.fill(0);
+      deathParticleLife.fill(0);
+      deathParticleShape.fill(PARTICLE_SHAPE_CIRCLE);
+      deathParticleActiveCount = 0;
+    }
+
+    function spawnHitNumber(data) {
+      const hit = acquireFromPool(hitNumbers);
+      if (!hit) return null;
+      resetHitNumberObject(hit);
+      Object.assign(hit, data);
+      return hit;
+    }
+
+    function despawnHitNumber(hit) {
+      releaseToPool(hitNumbers, hit, resetHitNumberObject);
+    }
+
     function applyFrostAura(tower) {
       if (tower.type !== 'FROST' || !tower.aoeRadius) return;
-      for (const enemy of enemies) {
-        const dist = Math.hypot(enemy.col - tower.col, enemy.row - tower.row);
-        if (dist <= tower.aoeRadius) {
-          applySlow(enemy, 1.0, tower.slow || 0.5);
-        }
+      for (const enemy of getEnemiesNearPoint(tower.col, tower.row, tower.aoeRadius)) {
+        applySlow(enemy, 1.0, tower.slow || 0.5);
       }
     }
 
@@ -1073,7 +1258,7 @@
       triggerTowerFire(tower, stats.fireRate);
       applyFrostAura(tower);
 
-      projectiles.push({
+      spawnProjectile({
         col: tower.col + 0.5,
         row: tower.row + 0.5,
         target: targetEnemy,
@@ -1108,7 +1293,7 @@
       const mergeCol = (towerMidCol + targetCol) / 2;
       const mergeRow = (towerMidRow + targetRow) / 2;
 
-      projectiles.push({
+      spawnProjectile({
         type: 'ICE_BOMB',
         phase: 'merge',
         mergeTimer: ICE_BOMB_MERGE_TIME,
@@ -1168,7 +1353,7 @@
 
       for (const tower of towers) {
         if (synergyShots.has(tower) || tower.cooldown > 0) continue;
-        if (!tower.currentTarget || tower.currentTarget.dying || !enemies.includes(tower.currentTarget)) continue;
+        if (!tower.currentTarget || !tower.currentTarget.active || tower.currentTarget.dying) continue;
         fireTowerProjectile(tower, tower.currentTarget, boosted);
       }
     }
@@ -1181,7 +1366,10 @@
         ? (1 + (currentWave - 10) * 0.25) * currentDifficulty.enemyHpScale
         : (1 + (currentWave - 1) * 0.15) * currentDifficulty.enemyHpScale;
       const speed = typeData.speed * waveSpeedMult * currentDifficulty.enemySpeedScale * (stormActive ? 1.2 : 1);
-      enemies.push({
+      const enemy = acquireFromPool(enemies);
+      if (!enemy) return;
+      resetEnemyObject(enemy);
+      Object.assign(enemy, {
         type,
         x: SPAWN_POS.col,
         y: SPAWN_POS.row,
@@ -1206,9 +1394,6 @@
         deathTimer: 0,
         dying: false,
         spawnAnim: 1.0,
-        // Trail positions for speed effect
-        trail: [],
-        // Boss rotation timer
         bossRotation: 0
       });
       playSpawnSound();
@@ -1224,20 +1409,19 @@
 
     function updateEnemies(dt) {
       const pathData = getPathSplineData({ includeBase: true, allowDirect: true, resolution: 14 });
+      clearEnemySpatialGrid();
 
       for (let i = enemies.length - 1; i >= 0; i--) {
         const enemy = enemies[i];
+        if (!enemy.active) continue;
 
         if (enemy.dying) {
           enemy.deathTimer += dt;
           if (enemy.deathTimer >= 0.15) {
-            enemies.splice(i, 1);
+            releaseToPool(enemies, enemy, resetEnemyObject);
           }
           continue;
         }
-
-        // Skip movement during wave preview
-        if (previewTimer > 0) continue;
 
         if (enemy.slowTimer > 0) {
           enemy.slowTimer -= dt;
@@ -1246,45 +1430,45 @@
             enemy.slowMult = 1;
           }
         }
-        if (enemy.stunTimer > 0) {
-          enemy.stunTimer -= dt;
-        }
-        // Spawn scale-in animation
+        if (enemy.stunTimer > 0) enemy.stunTimer -= dt;
         if (enemy.spawnAnim > 0) {
           enemy.spawnAnim -= dt * 3;
           if (enemy.spawnAnim < 0) enemy.spawnAnim = 0;
         }
 
-        enemy.terrainType = getEnemyTerrain(enemy);
-        const terrainSpeedMult = TERRAIN_DATA[enemy.terrainType].speedMult || 1;
-        const speedMod = (enemy.slowTimer > 0 ? (enemy.slowMult || 1) : 1) * terrainSpeedMult * (powerFreezeTimer > 0 ? 0 : 1) * (enemy.stunTimer > 0 ? 0 : 1);
-        const moveSpeed = enemy.speed * speedMod * dt;
         const pathLength = pathData.totalLength;
+        if (previewTimer <= 0) {
+          enemy.terrainType = getEnemyTerrain(enemy);
+          const terrainSpeedMult = TERRAIN_DATA[enemy.terrainType].speedMult || 1;
+          const speedMod = (enemy.slowTimer > 0 ? (enemy.slowMult || 1) : 1) * terrainSpeedMult * (powerFreezeTimer > 0 ? 0 : 1) * (enemy.stunTimer > 0 ? 0 : 1);
+          const moveSpeed = enemy.speed * speedMod * dt;
 
-        if (moveSpeed > 0 && pathLength > 0) {
-          enemy.pathIndex = Math.min(pathLength, Math.max(0, enemy.pathIndex + moveSpeed));
-          const currentPoint = getPointOnSpline(pathData, enemy.pathIndex);
-          const lookAhead = getPointOnSpline(pathData, Math.min(pathLength, enemy.pathIndex + 0.08));
-          enemy.angle = Math.atan2(lookAhead.y - currentPoint.y, lookAhead.x - currentPoint.x);
-          enemy.prevCol = enemy.col;
-          enemy.prevRow = enemy.row;
-          enemy.x = currentPoint.x;
-          enemy.y = currentPoint.y;
-          enemy.col = enemy.x;
-          enemy.row = enemy.y;
+          if (moveSpeed > 0 && pathLength > 0) {
+            enemy.pathIndex = Math.min(pathLength, Math.max(0, enemy.pathIndex + moveSpeed));
+            const currentPoint = getPointOnSpline(pathData, enemy.pathIndex);
+            const lookAhead = getPointOnSpline(pathData, Math.min(pathLength, enemy.pathIndex + 0.08));
+            enemy.angle = Math.atan2(lookAhead.y - currentPoint.y, lookAhead.x - currentPoint.x);
+            enemy.prevCol = enemy.col;
+            enemy.prevRow = enemy.row;
+            enemy.x = currentPoint.x;
+            enemy.y = currentPoint.y;
+            enemy.col = enemy.x;
+            enemy.row = enemy.y;
 
-          // Update trail for speed effect
-          enemy.trail.unshift({ col: enemy.col, row: enemy.row, angle: enemy.angle });
-          const maxTrail = enemy.type === 'SPEEDSTER' ? 3 : enemy.type === 'SCOUT' ? 2 : enemy.type === 'SOLDIER' ? 1 : 0;
-          if (enemy.trail.length > maxTrail) enemy.trail.pop();
+            enemy.trail.unshift({ col: enemy.col, row: enemy.row, angle: enemy.angle });
+            const maxTrail = enemy.type === 'SPEEDSTER' ? 3 : enemy.type === 'SCOUT' ? 2 : enemy.type === 'SOLDIER' ? 1 : 0;
+            if (enemy.trail.length > maxTrail) enemy.trail.pop();
+          }
         }
 
-        if (pathLength > 0 && enemy.pathIndex >= pathLength - 0.05 && Math.hypot(enemy.col - BASE_POS.col, enemy.row - BASE_POS.row) < 0.2) {
+        const baseDx = enemy.col - BASE_POS.col;
+        const baseDy = enemy.row - BASE_POS.row;
+        if (pathLength > 0 && enemy.pathIndex >= pathLength - 0.05 && baseDx * baseDx + baseDy * baseDy < 0.04) {
           const damage = Math.ceil(enemy.maxHP * 0.1);
           baseHP -= damage;
           screenShake.duration = 0.2;
           playBaseDamageSound();
-          enemies.splice(i, 1);
+          releaseToPool(enemies, enemy, resetEnemyObject);
           if (baseHP <= 0) {
             baseHP = 0;
             gameState = GameStates.GAME_OVER;
@@ -1308,10 +1492,12 @@
         if (enemy.isBoss) {
           enemy.bossRotation += dt * 1.5;
         }
+        addEnemyToSpatialGrid(enemy);
       }
     }
 
     function killEnemy(enemy) {
+      if (!enemy || !enemy.active || enemy.dying) return;
       enemy.dying = true;
       enemy.deathTimer = 0;
       currency += enemy.reward;
@@ -1334,7 +1520,7 @@
       for (let i = 0; i < particleCount; i++) {
         const angle = (i / particleCount) * Math.PI * 2 + Math.random() * 0.5;
         const speed = 50 + Math.random() * 80;
-        deathParticles.push({
+        spawnDeathParticle({
           x: cx, y: cy,
           vx: Math.cos(angle) * speed,
           vy: Math.sin(angle) * speed,
@@ -1350,10 +1536,11 @@
     function updateProjectiles(dt) {
       for (let i = projectiles.length - 1; i >= 0; i--) {
         const proj = projectiles[i];
+        if (!proj.active) continue;
         const target = proj.target;
 
-        if (!enemies.includes(target) || target.dying) {
-          projectiles.splice(i, 1);
+        if (!target || !target.active || target.dying) {
+          despawnProjectile(proj);
           continue;
         }
 
@@ -1372,9 +1559,9 @@
 
         const dx = (target.col + 0.5) - proj.col;
         const dy = (target.row + 0.5) - proj.row;
-        const dist = Math.hypot(dx, dy);
+        const distSq = dx * dx + dy * dy;
 
-        if (dist < 0.3) {
+        if (distSq < 0.09) {
           // Armor reduction (pierce bypasses armor)
           const armorPierced = proj.pierce;
           const targetArmor = armorPierced ? 0 : (target.armor || 0);
@@ -1397,7 +1584,7 @@
             for (let j = 0; j < particleCount; j++) {
               const spread = (Math.random() - 0.5) * Math.PI * 0.8;
               const speed = 220 + Math.random() * 180;
-              deathParticles.push({
+              spawnDeathParticle({
                 x: cx, y: cy,
                 vx: Math.cos(hitAngle + spread) * speed,
                 vy: Math.sin(hitAngle + spread) * speed,
@@ -1413,11 +1600,11 @@
           // Splash damage for cannon
           if (proj.splashRadius > 0) {
             for (const enemy of enemies) {
+              if (!enemy.active) continue;
               if (enemy === target || enemy.dying) continue;
               const sdx = enemy.col - target.col;
               const sdy = enemy.row - target.row;
-              const sdist = Math.hypot(sdx, sdy);
-              if (sdist <= proj.splashRadius) {
+              if (sdx * sdx + sdy * sdy <= proj.splashRadius * proj.splashRadius) {
                 const splashArmor = armorPierced ? 0 : (enemy.armor || 0);
                 const splashDmg = Math.max(1, proj.splashDamage - splashArmor);
                 enemy.hp -= splashDmg;
@@ -1427,7 +1614,7 @@
                 // Splash hit number
                 const sx = (enemy.col + 0.5) * cellSize;
                 const sy = (enemy.row + 0.5) * cellSize;
-                hitNumbers.push({
+                spawnHitNumber({
                   x: sx + (Math.random() - 0.5) * 8,
                   y: sy - 5,
                   text: '-' + splashDmg,
@@ -1454,7 +1641,7 @@
           const hy = (target.row + 0.5) * cellSize;
           const isBoost = proj.boosted;
           const isPierce = proj.pierce;
-          hitNumbers.push({
+          spawnHitNumber({
             x: hx + (Math.random() - 0.5) * 10,
             y: hy - 5,
             text: '-' + Math.round(damageDealt),
@@ -1466,8 +1653,9 @@
           if (target.hp <= 0) {
             killEnemy(target);
           }
-          projectiles.splice(i, 1);
+          despawnProjectile(proj);
         } else {
+          const dist = Math.sqrt(distSq);
           const speed = (PROJ_SPEED * dt) / cellSize;
           proj.col += (dx / dist) * speed;
           proj.row += (dy / dist) * speed;
@@ -1477,19 +1665,15 @@
 
     // === DEATH PARTICLES ===
     function updateDeathParticles(dt) {
-      for (let i = deathParticles.length - 1; i >= 0; i--) {
-        const p = deathParticles[i];
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
-        // Gravity
-        p.vy += 80 * dt;
-        // Slow down
-        p.vx *= 0.96;
-        p.vy *= 0.96;
-        p.life -= dt;
-        if (p.life <= 0) {
-          deathParticles.splice(i, 1);
-        }
+      for (let i = 0; i < PARTICLE_POOL_SIZE; i++) {
+        if (!deathParticleActive[i]) continue;
+        deathParticleX[i] += deathParticleVX[i] * dt;
+        deathParticleY[i] += deathParticleVY[i] * dt;
+        deathParticleVY[i] += 80 * dt;
+        deathParticleVX[i] *= 0.96;
+        deathParticleVY[i] *= 0.96;
+        deathParticleLife[i] -= dt;
+        if (deathParticleLife[i] <= 0) despawnDeathParticle(i);
       }
     }
 
@@ -1503,24 +1687,23 @@
     }
 
     function drawDeathParticles() {
-      for (const p of deathParticles) {
-        const alpha = p.life / (p.maxLife || 1);
-        const size = p.size * alpha;
+      for (let i = 0; i < PARTICLE_POOL_SIZE; i++) {
+        if (!deathParticleActive[i]) continue;
+        const alpha = deathParticleLife[i] / Math.max(deathParticleMaxLife[i], 0.0001);
+        const size = deathParticleSize[i] * alpha;
         if (size <= 0) continue;
         ctx.globalAlpha = alpha;
-        ctx.fillStyle = p.color;
-        ctx.shadowColor = p.color;
-        ctx.shadowBlur = 4;
-        if (p.shape === 'square') {
-          ctx.fillRect(p.x - size / 2, p.y - size / 2, size, size);
+        drawGlowSprite(ctx, deathParticleX[i], deathParticleY[i], Math.max(5, size * 2.8), deathParticleColor[i], 0.2);
+        ctx.fillStyle = deathParticleColor[i];
+        if (deathParticleShape[i] === PARTICLE_SHAPE_SQUARE) {
+          ctx.fillRect(deathParticleX[i] - size / 2, deathParticleY[i] - size / 2, size, size);
         } else {
           ctx.beginPath();
-          ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
+          ctx.arc(deathParticleX[i], deathParticleY[i], size, 0, Math.PI * 2);
           ctx.fill();
         }
       }
       ctx.globalAlpha = 1;
-      ctx.shadowBlur = 0;
     }
 
     function drawSplashRings() {
@@ -1530,14 +1713,12 @@
         const r = ring.radius * cellSize;
         const alpha = ring.life / 0.25;
         ctx.globalAlpha = alpha * 0.8;
+        drawGlowSprite(ctx, cx, cy, r * 1.08, ring.color || '#ff8800', 0.18 * alpha);
         ctx.beginPath();
         ctx.arc(cx, cy, r, 0, Math.PI * 2);
         ctx.strokeStyle = ring.color || '#ff8800';
         ctx.lineWidth = 3;
-        ctx.shadowColor = ring.color || '#ff8800';
-        ctx.shadowBlur = 10;
         ctx.stroke();
-        ctx.shadowBlur = 0;
         ctx.globalAlpha = 1;
       }
     }
@@ -1546,16 +1727,18 @@
     function updateHitNumbers(dt) {
       for (let i = hitNumbers.length - 1; i >= 0; i--) {
         const h = hitNumbers[i];
+        if (!h.active) continue;
         h.y += h.vy * dt;
         h.vy += 20 * dt; // slight acceleration downward
         h.life -= dt;
         if (h.life <= 0) {
-          hitNumbers.splice(i, 1);
+          despawnHitNumber(h);
         }
       }
     }
     function drawHitNumbers() {
       for (const h of hitNumbers) {
+        if (!h.active) continue;
         const alpha = Math.min(h.life * 2, 1);
         const size = Math.round(cellSize * 0.28 * h.scale);
         ctx.globalAlpha = alpha;
@@ -1564,11 +1747,9 @@
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#000';
         ctx.fillText(h.text, h.x + 1, h.y + 1);
+        drawGlowSprite(ctx, h.x, h.y, size * 0.95, h.color, 0.14);
         ctx.fillStyle = h.color;
-        ctx.shadowColor = h.color;
-        ctx.shadowBlur = 4;
         ctx.fillText(h.text, h.x, h.y);
-        ctx.shadowBlur = 0;
       }
       ctx.globalAlpha = 1;
     }
@@ -1588,11 +1769,9 @@
         ctx.font = `bold ${size}px sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.shadowColor = '#ffd700';
-        ctx.shadowBlur = 8;
+        drawGlowSprite(ctx, g.x, g.y, size * 1.05, '#ffd700', 0.18);
         ctx.fillStyle = '#ffd700';
         ctx.fillText(g.text, g.x, g.y);
-        ctx.shadowBlur = 0;
         ctx.globalAlpha = 1;
       }
     }
@@ -1669,6 +1848,7 @@
       gameState = GameStates.WAVE_ACTIVE;
       selectedTower = null;
       towerRangeTimer = 0;
+      rebuildStaticScene();
       updateUpgradeButton();
       setStartButton(false);
       updatePowerButtons();
@@ -1697,7 +1877,7 @@
         }
       }
 
-      if (waveEnemyQueue.length === 0 && enemies.length === 0) {
+      if (waveEnemyQueue.length === 0 && enemies.activeCount === 0) {
         currentWave++;
         stormActive = false;  // reset storm at wave end
         armoredWave = false;  // reset armored wave at wave end
@@ -1706,6 +1886,7 @@
           waveSpeedMult = 1 + (currentWave - 10) * 0.03;  // update speed scaling
           currency += WAVE_BONUS;
           gameState = GameStates.PLANNING;
+          invalidateStaticScene();
           setStartButton(pathTiles.length > 0);
           updateHUD();
           updateBuyHpButton();
@@ -1715,6 +1896,7 @@
           resetPathBudget();
           currency += WAVE_BONUS;
           gameState = GameStates.PLANNING;
+          invalidateStaticScene();
           setStartButton(pathTiles.length > 0);
           updateHUD();
           updateBuyHpButton();
@@ -1983,6 +2165,7 @@
     let lastHpText = '';
     let lastCurrencyText = '';
     let lastBudgetText = '';
+    let lastBudgetScale = -1;
 
     function updateHUD() {
       const stormStr = stormActive ? ' ⚡' : '';
@@ -2015,7 +2198,11 @@
       if (budgetStr !== lastBudgetText) {
         budgetText.textContent = budgetStr;
         lastBudgetText = budgetStr;
-        budgetFill.style.width = `${(pathTiles.length / Math.max(totalBudget, 1)) * 100}%`;
+      }
+      const budgetScale = used / Math.max(totalBudget, 1);
+      if (budgetScale !== lastBudgetScale) {
+        budgetFill.style.transform = `scaleX(${budgetScale})`;
+        lastBudgetScale = budgetScale;
       }
 
     }
@@ -2224,6 +2411,7 @@
       updateHUD();
       if (gameState === GameStates.PLANNING) setStartButton(false);
       playRemoveSound();
+      invalidateStaticScene();
 
     }
 
@@ -2307,6 +2495,7 @@
       powerNukeAvail = false;
       // Damage all enemies on screen
       for (const enemy of enemies) {
+        if (!enemy.active || enemy.dying) continue;
         enemy.hp -= POWER_NUKE_DAMAGE;
         if (enemy.hp <= 0) killEnemy(enemy);
       }
@@ -2369,8 +2558,10 @@
       baseHP = currentDifficulty.startHp;
       currentWave = 1;
       waveSpeedMult = 1.0;
-      enemies = [];
-      projectiles = [];
+      resetPool(enemies, resetEnemyObject);
+      resetPool(projectiles, resetProjectileObject);
+      resetDeathParticles();
+      resetPool(hitNumbers, resetHitNumberObject);
       splashRings = [];
       towerSynergies = [];
       waveEnemyQueue = [];
@@ -2381,6 +2572,7 @@
       powerBoostTimer = 0;
       initGrid();
       initTowers();
+      invalidateStaticScene();
       selectedTower = null;
       updateUpgradeButton();
       hideOverlay();
@@ -2401,14 +2593,136 @@
       const wrapper = document.getElementById('canvas-wrapper');
       const maxW = wrapper.clientWidth;
       const maxH = wrapper.clientHeight;
+      dpr = Math.min(window.devicePixelRatio || 1, 2.0);
       // Compute cellSize in physical pixels so canvas internals match DPR scaling
       cellSize = Math.floor(Math.min((maxW * dpr) / COLS, (maxH * dpr) / ROWS));
       // Canvas renders at full physical pixel resolution
       canvas.width = COLS * cellSize;
       canvas.height = ROWS * cellSize;
+      lightCanvas.width = canvas.width;
+      lightCanvas.height = canvas.height;
+      staticSceneCanvas.width = canvas.width;
+      staticSceneCanvas.height = canvas.height;
       // CSS size is smaller (CSS pixels = physical / dpr)
       canvas.style.width = `${COLS * cellSize / dpr}px`;
       canvas.style.height = `${ROWS * cellSize / dpr}px`;
+      staticSceneReady = false;
+      bossWarningGradient = ctx.createRadialGradient(
+        canvas.width / 2, canvas.height / 2, canvas.width * 0.3,
+        canvas.width / 2, canvas.height / 2, canvas.width * 0.8
+      );
+      bossWarningGradient.addColorStop(0, 'rgba(0,0,0,0)');
+      bossWarningGradient.addColorStop(1, '#b40000');
+      if (gameState === GameStates.WAVE_ACTIVE && validatePath()) {
+        rebuildStaticScene();
+      }
+    }
+
+    function invalidateStaticScene() {
+      staticSceneReady = false;
+    }
+
+    function getGlowSprite(color, radius) {
+      const cachedRadius = Math.max(2, Math.round(radius));
+      const key = `${color}:${cachedRadius}`;
+      if (glowSpriteCache.has(key)) return glowSpriteCache.get(key);
+
+      const sprite = document.createElement('canvas');
+      const size = cachedRadius * 2;
+      sprite.width = size;
+      sprite.height = size;
+      const spriteCtx = sprite.getContext('2d');
+      const gradient = spriteCtx.createRadialGradient(cachedRadius, cachedRadius, 0, cachedRadius, cachedRadius, cachedRadius);
+      gradient.addColorStop(0, color);
+      gradient.addColorStop(0.35, color);
+      gradient.addColorStop(1, 'rgba(0,0,0,0)');
+      spriteCtx.fillStyle = gradient;
+      spriteCtx.beginPath();
+      spriteCtx.arc(cachedRadius, cachedRadius, cachedRadius, 0, Math.PI * 2);
+      spriteCtx.fill();
+      glowSpriteCache.set(key, sprite);
+      return sprite;
+    }
+
+    function drawGlowSprite(targetCtx, x, y, radius, color, alpha) {
+      const sprite = getGlowSprite(color, radius);
+      const prevComposite = targetCtx.globalCompositeOperation;
+      const prevAlpha = targetCtx.globalAlpha;
+      targetCtx.globalCompositeOperation = 'lighter';
+      targetCtx.globalAlpha = prevAlpha * (alpha === undefined ? 1 : alpha);
+      targetCtx.drawImage(sprite, x - sprite.width / 2, y - sprite.height / 2);
+      targetCtx.globalAlpha = prevAlpha;
+      targetCtx.globalCompositeOperation = prevComposite;
+    }
+
+    function drawGlowSamples(targetCtx, samples, color, radius, alpha, spacing) {
+      if (!samples || samples.length === 0) return;
+      const step = spacing || Math.max(4, radius * 0.65);
+      let lastStamp = -Infinity;
+      for (const sample of samples) {
+        const distance = sample.distance || 0;
+        if (distance - lastStamp < step) continue;
+        lastStamp = distance;
+        drawGlowSprite(targetCtx, (sample.x + 0.5) * cellSize, (sample.y + 0.5) * cellSize, radius, color, alpha);
+      }
+    }
+
+    function drawGlowLine(targetCtx, x1, y1, x2, y2, color, radius, alpha, stamps) {
+      const count = stamps || Math.max(3, Math.ceil(Math.hypot(x2 - x1, y2 - y1) / Math.max(8, radius * 0.75)));
+      for (let i = 0; i <= count; i++) {
+        const t = count === 0 ? 0 : i / count;
+        drawGlowSprite(targetCtx, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, radius, color, alpha);
+      }
+    }
+
+    function buildLightMap() {
+      lightCtx.save();
+      lightCtx.setTransform(1, 0, 0, 1, 0, 0);
+      lightCtx.clearRect(0, 0, lightCanvas.width, lightCanvas.height);
+      lightCtx.fillStyle = '#000000';
+      lightCtx.fillRect(0, 0, lightCanvas.width, lightCanvas.height);
+      lightCtx.globalCompositeOperation = 'lighter';
+
+      for (const tower of towers) {
+        const cx = tower.col * cellSize + cellSize / 2;
+        const cy = tower.row * cellSize + cellSize / 2;
+        const radius = cellSize * (tower.type === 'SNIPER' ? 2.8 : tower.type === 'CANNON' ? 2.4 : tower.type === 'FROST' ? 2.6 : 2.2);
+        const alpha = powerBoostTimer > 0 ? 0.92 : 0.72;
+        drawGlowSprite(lightCtx, cx, cy, radius, '#ffffff', alpha);
+      }
+
+      for (const proj of projectiles) {
+        if (!proj.active) continue;
+        if (proj.phase === 'merge') {
+          const progress = 1 - Math.max(0, proj.mergeTimer) / proj.mergeDuration;
+          const eased = 1 - Math.pow(1 - progress, 2);
+          const orbAX = (proj.sourceA.col + (proj.mergePoint.col - proj.sourceA.col) * eased) * cellSize;
+          const orbAY = (proj.sourceA.row + (proj.mergePoint.row - proj.sourceA.row) * eased) * cellSize;
+          const orbBX = (proj.sourceB.col + (proj.mergePoint.col - proj.sourceB.col) * eased) * cellSize;
+          const orbBY = (proj.sourceB.row + (proj.mergePoint.row - proj.sourceB.row) * eased) * cellSize;
+          drawGlowSprite(lightCtx, orbAX, orbAY, cellSize * 0.7, '#ffffff', 0.8);
+          drawGlowSprite(lightCtx, orbBX, orbBY, cellSize * 0.7, '#ffffff', 0.8);
+          drawGlowSprite(lightCtx, proj.mergePoint.col * cellSize, proj.mergePoint.row * cellSize, cellSize * (0.8 + eased * 0.7), '#ffffff', 0.95);
+          continue;
+        }
+
+        drawGlowSprite(lightCtx, proj.col * cellSize, proj.row * cellSize, proj.towerType === 'ICE_BOMB' ? cellSize * 1.1 : cellSize * 0.75, '#ffffff', proj.towerType === 'ICE_BOMB' ? 0.95 : 0.78);
+      }
+
+      for (const ring of splashRings) {
+        const cx = (ring.col + 0.5) * cellSize;
+        const cy = (ring.row + 0.5) * cellSize;
+        const life = Math.max(0, ring.life / 0.25);
+        drawGlowSprite(lightCtx, cx, cy, Math.max(cellSize * 1.5, ring.radius * cellSize * 1.6), '#ffffff', 0.8 * life);
+      }
+
+      for (let i = 0; i < PARTICLE_POOL_SIZE; i++) {
+        if (!deathParticleActive[i]) continue;
+        drawGlowSprite(lightCtx, deathParticleX[i], deathParticleY[i], Math.max(6, deathParticleSize[i] * 4), '#ffffff', 0.18);
+      }
+
+      lightCtx.globalCompositeOperation = 'source-over';
+      lightCtx.restore();
     }
 
     function render() {
@@ -2420,21 +2734,27 @@
         ctx.translate(screenShake.x, screenShake.y);
       }
 
-      ctx.fillStyle = '#0a0a0f';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (gameState === GameStates.WAVE_ACTIVE && staticSceneReady) {
+        ctx.drawImage(staticSceneCanvas, 0, 0);
+        drawSynergyTethers();
+        drawTowerDynamics();
+      } else {
+        ctx.fillStyle = '#0a0a0f';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        drawGrid();
+        drawPath();
+        drawPathFlow();
+        drawSynergyTethers();
+        drawTowers();
+        drawSpawnAndBase();
+      }
 
-      drawGrid();
-      drawPath();
-      drawPathFlow();
-      drawSynergyTethers();
-      drawTowers();
       drawEnemies();
       drawProjectiles();
       drawDeathParticles();
       drawSplashRings();
       drawHitNumbers();
       drawGoldPickups();
-      drawSpawnAndBase();
 
       if (flashTiles.length > 0) {
         for (let i = flashTiles.length - 1; i >= 0; i--) {
@@ -2456,15 +2776,10 @@
 
       // Power-up visual effects
       if (bossWarningFlash > 0) {
-        // Red edge vignette
-        const gradient = ctx.createRadialGradient(
-          canvas.width/2, canvas.height/2, canvas.width * 0.3,
-          canvas.width/2, canvas.height/2, canvas.width * 0.8
-        );
-        gradient.addColorStop(0, 'rgba(0,0,0,0)');
-        gradient.addColorStop(1, `rgba(180,0,0,${bossWarningFlash * 0.6})`);
-        ctx.fillStyle = gradient;
+        ctx.globalAlpha = bossWarningFlash * 0.6;
+        ctx.fillStyle = bossWarningGradient;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.globalAlpha = 1;
 
         // Warning text
         if (bossWarningTimer > 0.5) {
@@ -2476,8 +2791,7 @@
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
           ctx.fillStyle = megaBossWarning ? '#ff0044' : '#ff0000';
-          ctx.shadowColor = megaBossWarning ? '#ff0044' : '#ff0000';
-          ctx.shadowBlur = 20;
+          drawGlowSprite(ctx, canvas.width/2, canvas.height/2, canvas.width * 0.15, megaBossWarning ? '#ff0044' : '#ff0000', 0.18);
           // Scale down until text fits
           const warningText = megaBossWarning ? '⚠ MEGA BOSS INCOMING ⚠' : '⚠ BOSS INCOMING ⚠';
           while (ctx.measureText(warningText).width > maxWidth && fontSize > 16) {
@@ -2496,14 +2810,16 @@
       if (powerBoostTimer > 0) {
         // Pulsing glow on towers
         const pulse = Math.sin(Date.now() / 100) * 0.3 + 0.7;
+        ctx.globalAlpha = pulse * 0.2;
+        ctx.fillStyle = '#ffd700';
         for (const tower of towers) {
           const cx = tower.col * cellSize + cellSize / 2;
           const cy = tower.row * cellSize + cellSize / 2;
           ctx.beginPath();
           ctx.arc(cx, cy, cellSize * 0.8, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(255,215,0,${pulse * 0.2})`;
           ctx.fill();
         }
+        ctx.globalAlpha = 1;
       }
       if (powerFlashTimer > 0) {
         const el = document.getElementById('power-flash');
@@ -2517,10 +2833,15 @@
         if (el) el.style.opacity = '0';
       }
 
+      buildLightMap();
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.drawImage(lightCanvas, 0, 0);
+      ctx.globalCompositeOperation = 'source-over';
+
       ctx.restore();
     }
 
-    function drawGrid() {
+    function drawGrid(targetCtx = ctx) {
       for (let row = 0; row < ROWS; row++) {
         for (let col = 0; col < COLS; col++) {
           const terrain = getTerrainAt(col, row);
@@ -2528,55 +2849,55 @@
           const y = row * cellSize;
 
           if (terrain === TERRAIN_TYPES.MUD) {
-            ctx.fillStyle = '#3d2618';
-            ctx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
-            ctx.fillStyle = 'rgba(94,62,40,0.45)';
-            ctx.beginPath();
-            ctx.ellipse(x + cellSize * 0.4, y + cellSize * 0.58, cellSize * 0.2, cellSize * 0.12, -0.2, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.beginPath();
-            ctx.ellipse(x + cellSize * 0.72, y + cellSize * 0.38, cellSize * 0.14, cellSize * 0.08, 0.4, 0, Math.PI * 2);
-            ctx.fill();
+            targetCtx.fillStyle = '#3d2618';
+            targetCtx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+            targetCtx.fillStyle = 'rgba(94,62,40,0.45)';
+            targetCtx.beginPath();
+            targetCtx.ellipse(x + cellSize * 0.4, y + cellSize * 0.58, cellSize * 0.2, cellSize * 0.12, -0.2, 0, Math.PI * 2);
+            targetCtx.fill();
+            targetCtx.beginPath();
+            targetCtx.ellipse(x + cellSize * 0.72, y + cellSize * 0.38, cellSize * 0.14, cellSize * 0.08, 0.4, 0, Math.PI * 2);
+            targetCtx.fill();
           } else if (terrain === TERRAIN_TYPES.ICE) {
-            ctx.fillStyle = '#8ecff5';
-            ctx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
-            ctx.strokeStyle = 'rgba(235,248,255,0.55)';
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.moveTo(x + cellSize * 0.18, y + cellSize * 0.8);
-            ctx.lineTo(x + cellSize * 0.8, y + cellSize * 0.2);
-            ctx.moveTo(x + cellSize * 0.3, y + cellSize * 0.22);
-            ctx.lineTo(x + cellSize * 0.76, y + cellSize * 0.48);
-            ctx.stroke();
+            targetCtx.fillStyle = '#8ecff5';
+            targetCtx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+            targetCtx.strokeStyle = 'rgba(235,248,255,0.55)';
+            targetCtx.lineWidth = 1.5;
+            targetCtx.beginPath();
+            targetCtx.moveTo(x + cellSize * 0.18, y + cellSize * 0.8);
+            targetCtx.lineTo(x + cellSize * 0.8, y + cellSize * 0.2);
+            targetCtx.moveTo(x + cellSize * 0.3, y + cellSize * 0.22);
+            targetCtx.lineTo(x + cellSize * 0.76, y + cellSize * 0.48);
+            targetCtx.stroke();
           } else if (terrain === TERRAIN_TYPES.HIGH_GROUND) {
-            ctx.fillStyle = '#665946';
-            ctx.fillRect(x + 2, y + 4, cellSize - 4, cellSize - 6);
-            ctx.fillStyle = '#8b7d66';
-            ctx.fillRect(x + 3, y + 2, cellSize - 6, cellSize - 8);
-            ctx.strokeStyle = 'rgba(255,234,196,0.35)';
-            ctx.lineWidth = 1.5;
-            ctx.strokeRect(x + 4, y + 3, cellSize - 8, cellSize - 10);
+            targetCtx.fillStyle = '#665946';
+            targetCtx.fillRect(x + 2, y + 4, cellSize - 4, cellSize - 6);
+            targetCtx.fillStyle = '#8b7d66';
+            targetCtx.fillRect(x + 3, y + 2, cellSize - 6, cellSize - 8);
+            targetCtx.strokeStyle = 'rgba(255,234,196,0.35)';
+            targetCtx.lineWidth = 1.5;
+            targetCtx.strokeRect(x + 4, y + 3, cellSize - 8, cellSize - 10);
           }
         }
       }
 
-      ctx.strokeStyle = '#1a1a2e';
-      ctx.lineWidth = 1;
+      targetCtx.strokeStyle = '#1a1a2e';
+      targetCtx.lineWidth = 1;
       for (let row = 0; row <= ROWS; row++) {
-        ctx.beginPath();
-        ctx.moveTo(0, row * cellSize);
-        ctx.lineTo(canvas.width, row * cellSize);
-        ctx.stroke();
+        targetCtx.beginPath();
+        targetCtx.moveTo(0, row * cellSize);
+        targetCtx.lineTo(targetCtx.canvas.width, row * cellSize);
+        targetCtx.stroke();
       }
       for (let col = 0; col <= COLS; col++) {
-        ctx.beginPath();
-        ctx.moveTo(col * cellSize, 0);
-        ctx.lineTo(col * cellSize, canvas.height);
-        ctx.stroke();
+        targetCtx.beginPath();
+        targetCtx.moveTo(col * cellSize, 0);
+        targetCtx.lineTo(col * cellSize, targetCtx.canvas.height);
+        targetCtx.stroke();
       }
     }
 
-    function drawPath() {
+    function drawPath(targetCtx = ctx) {
       const pathData = getPathSplineData({ includeBase: validatePath(), allowDirect: false, resolution: 14 });
       if (pathData.segments.length === 0) return;
 
@@ -2590,10 +2911,10 @@
         coreColor = '#4ade80';
       }
 
-      ctx.beginPath();
-      ctx.moveTo((pathData.segments[0].start.x + 0.5) * cellSize, (pathData.segments[0].start.y + 0.5) * cellSize);
+      targetCtx.beginPath();
+      targetCtx.moveTo((pathData.segments[0].start.x + 0.5) * cellSize, (pathData.segments[0].start.y + 0.5) * cellSize);
       for (const segment of pathData.segments) {
-        ctx.bezierCurveTo(
+        targetCtx.bezierCurveTo(
           (segment.cp1.x + 0.5) * cellSize,
           (segment.cp1.y + 0.5) * cellSize,
           (segment.cp2.x + 0.5) * cellSize,
@@ -2603,27 +2924,25 @@
         );
       }
 
-      ctx.strokeStyle = glowColor;
-      ctx.lineWidth = cellSize * 0.4;
-      ctx.lineJoin = 'round';
-      ctx.lineCap = 'round';
-      ctx.shadowBlur = 15;
-      ctx.shadowColor = '#4a4a6a';
-      ctx.stroke();
+      drawGlowSamples(targetCtx, pathData.samples, '#4a4a6a', cellSize * 0.28, 0.35, cellSize * 0.24);
+      targetCtx.strokeStyle = glowColor;
+      targetCtx.lineWidth = cellSize * 0.4;
+      targetCtx.lineJoin = 'round';
+      targetCtx.lineCap = 'round';
+      targetCtx.stroke();
 
-      ctx.strokeStyle = coreColor;
-      ctx.lineWidth = cellSize * 0.14;
-      ctx.shadowBlur = 0;
-      ctx.stroke();
+      targetCtx.strokeStyle = coreColor;
+      targetCtx.lineWidth = cellSize * 0.14;
+      targetCtx.stroke();
 
       for (const anchor of pathData.anchors) {
-        ctx.beginPath();
-        ctx.arc((anchor.x + 0.5) * cellSize, (anchor.y + 0.5) * cellSize, cellSize * 0.06, 0, Math.PI * 2);
-        ctx.fillStyle = coreColor;
-        ctx.globalAlpha = 0.45;
-        ctx.fill();
+        targetCtx.beginPath();
+        targetCtx.arc((anchor.x + 0.5) * cellSize, (anchor.y + 0.5) * cellSize, cellSize * 0.06, 0, Math.PI * 2);
+        targetCtx.fillStyle = coreColor;
+        targetCtx.globalAlpha = 0.45;
+        targetCtx.fill();
       }
-      ctx.globalAlpha = 1;
+      targetCtx.globalAlpha = 1;
     }
 
     // Static path flow: dashed line + arrows, no animation
@@ -2640,11 +2959,10 @@
       const pulse = Math.sin(t * Math.PI * 2) * 0.3 + 0.7;
 
       ctx.save();
+      drawGlowSprite(ctx, (dot.x + 0.5) * cellSize, (dot.y + 0.5) * cellSize, cellSize * 0.3 * pulse, '#4ade80', 0.45);
       ctx.beginPath();
       ctx.arc((dot.x + 0.5) * cellSize, (dot.y + 0.5) * cellSize, cellSize * 0.12 * pulse, 0, Math.PI * 2);
       ctx.fillStyle = '#4ade80';
-      ctx.shadowColor = '#4ade80';
-      ctx.shadowBlur = 10;
       ctx.fill();
       ctx.restore();
 
@@ -2675,8 +2993,7 @@
       ctx.clearRect(0, 0, w, h);
 
       ctx.save();
-      ctx.shadowColor = color;
-      ctx.shadowBlur = 8;
+      drawGlowSprite(ctx, cx, cy, baseSize * 0.46, color, 0.35);
 
       if (type === 'TURRET') {
         ctx.fillStyle = '#1a2a3a';
@@ -2735,7 +3052,6 @@
         ctx.rotate(Math.PI / 6);
         ctx.globalAlpha = 0.85;
         ctx.fillStyle = color;
-        ctx.shadowBlur = 15;
         ctx.beginPath();
         for (let i = 0; i < 6; i++) {
           const a = (i / 6) * Math.PI * 2;
@@ -2747,7 +3063,6 @@
         ctx.fill();
         ctx.globalAlpha = 1;
         ctx.fillStyle = '#0a1a3a';
-        ctx.shadowBlur = 0;
         ctx.beginPath();
         for (let i = 0; i < 6; i++) {
           const a = (i / 6) * Math.PI * 2;
@@ -2771,11 +3086,252 @@
         ctx.beginPath();
         ctx.arc(0, 0, baseSize * 0.1, 0, Math.PI * 2);
         ctx.fillStyle = color;
-        ctx.shadowColor = color;
-        ctx.shadowBlur = 8;
         ctx.fill();
       }
       ctx.restore();
+    }
+
+    function drawTowerLevelIndicator(targetCtx, tower, baseSize) {
+      const lvl = tower.level || 1;
+      if (lvl < 2) return;
+      const labelY = -baseSize / 2 - 6;
+      targetCtx.textAlign = 'center';
+      targetCtx.textBaseline = 'middle';
+      if (lvl <= 3) {
+        const starR = cellSize * 0.12;
+        const isGold = lvl >= 3;
+        const numStars = lvl;
+        const totalW = numStars * starR * 2.2;
+        const startX = -totalW / 2 + starR;
+        for (let i = 0; i < numStars; i++) {
+          const sx = startX + i * starR * 2.2;
+          const sy = labelY;
+          targetCtx.beginPath();
+          for (let j = 0; j < 10; j++) {
+            const angle = (j * Math.PI / 5) - Math.PI / 2;
+            const r = j % 2 === 0 ? starR : starR * 0.4;
+            const px = sx + Math.cos(angle) * r;
+            const py = sy + Math.sin(angle) * r;
+            if (j === 0) targetCtx.moveTo(px, py);
+            else targetCtx.lineTo(px, py);
+          }
+          targetCtx.closePath();
+          targetCtx.fillStyle = isGold ? '#ffd700' : '#c0c0c0';
+          if (isGold) drawGlowSprite(targetCtx, sx, sy, starR * 1.5, '#ffd700', 0.35);
+          targetCtx.fill();
+          targetCtx.strokeStyle = isGold ? '#b8860b' : '#888888';
+          targetCtx.lineWidth = 1;
+          targetCtx.stroke();
+        }
+      } else {
+        targetCtx.font = `bold ${cellSize * 0.22}px sans-serif`;
+        targetCtx.fillStyle = '#ffd700';
+        drawGlowSprite(targetCtx, 0, labelY, cellSize * 0.3, '#ffd700', 0.3);
+        targetCtx.fillText('Lv' + lvl, 0, labelY);
+      }
+    }
+
+    function drawTowerStaticBody(targetCtx, tower, baseSize) {
+      drawTowerLevelIndicator(targetCtx, tower, baseSize);
+
+      if (tower.type === 'TURRET') {
+        targetCtx.fillStyle = '#1a2a3a';
+        targetCtx.fillRect(-baseSize / 2, -baseSize / 2, baseSize, baseSize);
+        targetCtx.beginPath();
+        targetCtx.arc(0, 0, baseSize * 0.28, 0, Math.PI * 2);
+        targetCtx.fillStyle = tower.color;
+        targetCtx.fill();
+        targetCtx.beginPath();
+        targetCtx.arc(0, 0, baseSize * 0.15, 0, Math.PI * 2);
+        targetCtx.fillStyle = '#0a1520';
+        targetCtx.fill();
+      } else if (tower.type === 'CANNON') {
+        targetCtx.fillStyle = '#2a1a0a';
+        targetCtx.fillRect(-baseSize / 2, -baseSize / 2, baseSize, baseSize);
+        targetCtx.strokeStyle = tower.color;
+        targetCtx.lineWidth = 3;
+        targetCtx.strokeRect(-baseSize / 2 + 2, -baseSize / 2 + 2, baseSize - 4, baseSize - 4);
+        targetCtx.beginPath();
+        targetCtx.arc(0, 0, baseSize * 0.3, 0, Math.PI * 2);
+        targetCtx.fillStyle = tower.color;
+        targetCtx.fill();
+        targetCtx.beginPath();
+        targetCtx.arc(0, 0, baseSize * 0.18, 0, Math.PI * 2);
+        targetCtx.fillStyle = '#1a0a00';
+        targetCtx.fill();
+      } else if (tower.type === 'SNIPER') {
+        targetCtx.fillStyle = '#1a0a0a';
+        targetCtx.fillRect(-baseSize / 2, -baseSize / 2, baseSize, baseSize);
+        targetCtx.fillStyle = tower.color;
+        targetCtx.fillRect(-baseSize / 2, -baseSize / 2, baseSize * 0.15, baseSize * 0.15);
+        targetCtx.fillRect(baseSize / 2 - baseSize * 0.15, -baseSize / 2, baseSize * 0.15, baseSize * 0.15);
+        targetCtx.fillRect(-baseSize / 2, baseSize / 2 - baseSize * 0.15, baseSize * 0.15, baseSize * 0.15);
+        targetCtx.fillRect(baseSize / 2 - baseSize * 0.15, baseSize / 2 - baseSize * 0.15, baseSize * 0.15, baseSize * 0.15);
+        targetCtx.beginPath();
+        targetCtx.arc(0, 0, baseSize * 0.22, 0, Math.PI * 2);
+        targetCtx.fillStyle = tower.color;
+        targetCtx.fill();
+        targetCtx.beginPath();
+        targetCtx.arc(0, 0, baseSize * 0.12, 0, Math.PI * 2);
+        targetCtx.fillStyle = '#200a0a';
+        targetCtx.fill();
+      }
+    }
+
+    function drawTowerDynamicBody(targetCtx, tower, baseSize, boosted, frozen) {
+      if (tower.type !== 'FROST') {
+        drawGlowSprite(targetCtx, 0, 0, boosted ? baseSize * 0.95 : baseSize * 0.7, tower.color, boosted ? 0.48 : 0.3);
+      }
+
+      if (tower.type === 'TURRET') {
+        targetCtx.rotate(tower.angle);
+        const recoilOffset = tower.recoil * 3;
+        targetCtx.fillStyle = tower.color;
+        targetCtx.fillRect(-baseSize * 0.1, -baseSize * 0.1, baseSize * 0.65 - recoilOffset, baseSize * 0.2);
+
+        if (tower.muzzleFlash > 0) {
+          targetCtx.globalAlpha = tower.muzzleFlash;
+          drawGlowSprite(targetCtx, baseSize * 0.65 - recoilOffset, 0, baseSize * 0.3, '#ffffff', 0.55);
+          targetCtx.beginPath();
+          targetCtx.arc(baseSize * 0.65 - recoilOffset, 0, baseSize * 0.2, 0, Math.PI * 2);
+          targetCtx.fillStyle = '#ffffff';
+          targetCtx.fill();
+          targetCtx.globalAlpha = 1;
+        }
+      } else if (tower.type === 'CANNON') {
+        targetCtx.rotate(tower.angle);
+        const recoilOffset = tower.recoil * 4;
+        targetCtx.fillStyle = tower.color;
+        targetCtx.fillRect(-baseSize * 0.05, -baseSize * 0.18, baseSize * 0.5 - recoilOffset, baseSize * 0.36);
+
+        if (tower.muzzleFlash > 0) {
+          targetCtx.globalAlpha = tower.muzzleFlash * 0.9;
+          drawGlowSprite(targetCtx, baseSize * 0.5 - recoilOffset, 0, baseSize * 0.35, '#ff8800', 0.5);
+          targetCtx.beginPath();
+          targetCtx.arc(baseSize * 0.5 - recoilOffset, 0, baseSize * 0.25, 0, Math.PI * 2);
+          targetCtx.fillStyle = '#ffcc44';
+          targetCtx.fill();
+          targetCtx.globalAlpha = 1;
+        }
+      } else if (tower.type === 'SNIPER') {
+        targetCtx.rotate(tower.angle);
+        const recoilOffset = tower.recoil * 2;
+        targetCtx.fillStyle = tower.color;
+        targetCtx.fillRect(-baseSize * 0.05, -baseSize * 0.07, baseSize * 0.9 - recoilOffset, baseSize * 0.14);
+
+        targetCtx.beginPath();
+        targetCtx.arc(0, -baseSize * 0.28, baseSize * 0.1, 0, Math.PI * 2);
+        targetCtx.strokeStyle = tower.color;
+        targetCtx.lineWidth = 2;
+        targetCtx.stroke();
+        targetCtx.beginPath();
+        targetCtx.arc(-baseSize * 0.03, -baseSize * 0.28, baseSize * 0.03, 0, Math.PI * 2);
+        targetCtx.fillStyle = 'rgba(255,255,255,0.6)';
+        targetCtx.fill();
+
+        if (tower.muzzleFlash > 0) {
+          targetCtx.globalAlpha = tower.muzzleFlash;
+          drawGlowSprite(targetCtx, baseSize * 0.9 - recoilOffset, 0, baseSize * 0.22, '#ffffff', 0.45);
+          targetCtx.beginPath();
+          targetCtx.arc(baseSize * 0.9 - recoilOffset, 0, baseSize * 0.12, 0, Math.PI * 2);
+          targetCtx.fillStyle = '#ffffff';
+          targetCtx.fill();
+          targetCtx.globalAlpha = 1;
+        }
+      } else if (tower.type === 'FROST') {
+        targetCtx.rotate(tower.angle + Math.PI / 6);
+        const pulse = Math.sin(Date.now() / 400) * 0.15 + 0.85;
+        targetCtx.globalAlpha = frozen ? 0.3 : 0.6 * pulse;
+        targetCtx.fillStyle = tower.color;
+        drawGlowSprite(targetCtx, 0, 0, boosted ? baseSize * 0.9 : baseSize * 0.72, tower.color, frozen ? 0.16 : 0.42 * pulse);
+        targetCtx.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2;
+          const r = baseSize * 0.48;
+          if (i === 0) targetCtx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+          else targetCtx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+        }
+        targetCtx.closePath();
+        targetCtx.fill();
+        targetCtx.globalAlpha = 1;
+
+        targetCtx.fillStyle = '#0a1a3a';
+        targetCtx.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2;
+          const r = baseSize * 0.28;
+          if (i === 0) targetCtx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+          else targetCtx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+        }
+        targetCtx.closePath();
+        targetCtx.fill();
+
+        targetCtx.strokeStyle = tower.color;
+        targetCtx.lineWidth = 1.5;
+        targetCtx.globalAlpha = 0.5;
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2;
+          targetCtx.beginPath();
+          targetCtx.moveTo(0, 0);
+          targetCtx.lineTo(Math.cos(a) * baseSize * 0.45, Math.sin(a) * baseSize * 0.45);
+          targetCtx.stroke();
+        }
+        targetCtx.globalAlpha = 1;
+
+        targetCtx.beginPath();
+        targetCtx.arc(0, 0, baseSize * 0.1, 0, Math.PI * 2);
+        targetCtx.fillStyle = tower.color;
+        drawGlowSprite(targetCtx, 0, 0, baseSize * 0.22, tower.color, 0.38);
+        targetCtx.fill();
+
+        if (tower.muzzleFlash > 0) {
+          targetCtx.globalAlpha = tower.muzzleFlash * 0.8;
+          drawGlowSprite(targetCtx, baseSize * 0.45, 0, baseSize * 0.28, '#aaeeff', 0.5);
+          targetCtx.beginPath();
+          targetCtx.arc(baseSize * 0.45, 0, baseSize * 0.18, 0, Math.PI * 2);
+          targetCtx.fillStyle = '#aaeeff';
+          targetCtx.fill();
+          targetCtx.globalAlpha = 1;
+        }
+      }
+    }
+
+    function drawStaticTowers(targetCtx) {
+      for (const tower of towers) {
+        const cx = tower.col * cellSize + cellSize / 2;
+        const cy = tower.row * cellSize + cellSize / 2;
+        const baseSize = cellSize * 0.7;
+        targetCtx.save();
+        targetCtx.translate(cx, cy);
+        drawTowerStaticBody(targetCtx, tower, baseSize);
+        targetCtx.restore();
+      }
+    }
+
+    function drawTowerDynamics(targetCtx = ctx) {
+      for (const tower of towers) {
+        const cx = tower.col * cellSize + cellSize / 2;
+        const cy = tower.row * cellSize + cellSize / 2;
+        const baseSize = cellSize * 0.7;
+        const boosted = powerBoostTimer > 0;
+        const frozen = powerFreezeTimer > 0;
+        targetCtx.save();
+        targetCtx.translate(cx, cy);
+        drawTowerDynamicBody(targetCtx, tower, baseSize, boosted, frozen);
+        targetCtx.restore();
+      }
+    }
+
+    function rebuildStaticScene() {
+      staticSceneCtx.setTransform(1, 0, 0, 1, 0, 0);
+      staticSceneCtx.clearRect(0, 0, staticSceneCanvas.width, staticSceneCanvas.height);
+      staticSceneCtx.fillStyle = '#0a0a0f';
+      staticSceneCtx.fillRect(0, 0, staticSceneCanvas.width, staticSceneCanvas.height);
+      drawGrid(staticSceneCtx);
+      drawPath(staticSceneCtx);
+      drawStaticTowers(staticSceneCtx);
+      drawSpawnAndBase(staticSceneCtx);
+      staticSceneReady = true;
     }
 
     function drawTowers() {
@@ -2802,404 +3358,230 @@
 
         ctx.save();
         ctx.translate(cx, cy);
+        drawTowerStaticBody(ctx, tower, baseSize);
+        drawTowerDynamicBody(ctx, tower, baseSize, boosted, frozen);
 
-        // Glow
-        ctx.shadowColor = tower.color;
-        ctx.shadowBlur = boosted ? 25 : 12;
-
-        // Level indicator above tower — stars for Lv2-3, LvN text for Lv4+
-        const lvl = tower.level || 1;
-        if (lvl >= 2) {
-          const labelY = -baseSize / 2 - 6;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          if (lvl <= 3) {
-            // Lv2-3: silver/gold stars
-            const starR = cellSize * 0.12;
-            const isGold = lvl >= 3;
-            const numStars = lvl;
-            const totalW = numStars * starR * 2.2;
-            const startX = -totalW / 2 + starR;
-            ctx.shadowBlur = 0;
-            for (let i = 0; i < numStars; i++) {
-              const sx = startX + i * starR * 2.2;
-              const sy = labelY;
-              ctx.beginPath();
-              for (let j = 0; j < 10; j++) {
-                const angle = (j * Math.PI / 5) - Math.PI / 2;
-                const r = j % 2 === 0 ? starR : starR * 0.4;
-                const px = sx + Math.cos(angle) * r;
-                const py = sy + Math.sin(angle) * r;
-                if (j === 0) ctx.moveTo(px, py);
-                else ctx.lineTo(px, py);
-              }
-              ctx.closePath();
-              ctx.fillStyle = isGold ? '#ffd700' : '#c0c0c0';
-              if (isGold) { ctx.shadowColor = '#ffd700'; ctx.shadowBlur = 6; }
-              ctx.fill();
-              ctx.strokeStyle = isGold ? '#b8860b' : '#888888';
-              ctx.lineWidth = 1;
-              ctx.stroke();
-              ctx.shadowBlur = 0;
-            }
-          } else {
-            // Lv4+: show LvN text in gold
-            ctx.font = `bold ${cellSize * 0.22}px sans-serif`;
-            ctx.fillStyle = '#ffd700';
-            ctx.shadowColor = '#ffd700';
-            ctx.shadowBlur = 6;
-            ctx.fillText('Lv' + lvl, 0, labelY);
-            ctx.shadowBlur = 0;
-          }
-        }
-
-        if (tower.type === 'TURRET') {
-          // Dark base square
-          ctx.fillStyle = '#1a2a3a';
-          ctx.fillRect(-baseSize / 2, -baseSize / 2, baseSize, baseSize);
-
-          // Rotating turret head
-          ctx.rotate(tower.angle);
-          const recoilOffset = tower.recoil * 3;
-
-          // Barrel
-          ctx.fillStyle = tower.color;
-          ctx.fillRect(-baseSize * 0.1, -baseSize * 0.1, baseSize * 0.65 - recoilOffset, baseSize * 0.2);
-
-          // Circular body
-          ctx.beginPath();
-          ctx.arc(0, 0, baseSize * 0.28, 0, Math.PI * 2);
-          ctx.fillStyle = tower.color;
-          ctx.fill();
-
-          // Inner circle
-          ctx.beginPath();
-          ctx.arc(0, 0, baseSize * 0.15, 0, Math.PI * 2);
-          ctx.fillStyle = '#0a1520';
-          ctx.fill();
-
-          // Muzzle flash
-          if (tower.muzzleFlash > 0) {
-            ctx.globalAlpha = tower.muzzleFlash;
-            ctx.beginPath();
-            ctx.arc(baseSize * 0.65 - recoilOffset, 0, baseSize * 0.2, 0, Math.PI * 2);
-            ctx.fillStyle = '#ffffff';
-            ctx.shadowColor = '#ffffff';
-            ctx.shadowBlur = 20;
-            ctx.fill();
-            ctx.globalAlpha = 1;
-          }
-
-        } else if (tower.type === 'CANNON') {
-          // Chunky dark base
-          ctx.fillStyle = '#2a1a0a';
-          ctx.fillRect(-baseSize / 2, -baseSize / 2, baseSize, baseSize);
-
-          // Thick border
-          ctx.strokeStyle = tower.color;
-          ctx.lineWidth = 3;
-          ctx.strokeRect(-baseSize / 2 + 2, -baseSize / 2 + 2, baseSize - 4, baseSize - 4);
-
-          ctx.rotate(tower.angle);
-          const recoilOffset = tower.recoil * 4;
-
-          // Short thick barrel
-          ctx.fillStyle = tower.color;
-          ctx.fillRect(-baseSize * 0.05, -baseSize * 0.18, baseSize * 0.5 - recoilOffset, baseSize * 0.36);
-
-          // Body circle
-          ctx.beginPath();
-          ctx.arc(0, 0, baseSize * 0.3, 0, Math.PI * 2);
-          ctx.fillStyle = tower.color;
-          ctx.fill();
-
-          // Inner dark
-          ctx.beginPath();
-          ctx.arc(0, 0, baseSize * 0.18, 0, Math.PI * 2);
-          ctx.fillStyle = '#1a0a00';
-          ctx.fill();
-
-          // Muzzle flash
-          if (tower.muzzleFlash > 0) {
-            ctx.globalAlpha = tower.muzzleFlash * 0.9;
-            ctx.beginPath();
-            ctx.arc(baseSize * 0.5 - recoilOffset, 0, baseSize * 0.25, 0, Math.PI * 2);
-            ctx.fillStyle = '#ffcc44';
-            ctx.shadowColor = '#ff8800';
-            ctx.shadowBlur = 25;
-            ctx.fill();
-            ctx.globalAlpha = 1;
-          }
-
-        } else if (tower.type === 'SNIPER') {
-          // Dark base
-          ctx.fillStyle = '#1a0a0a';
-          ctx.fillRect(-baseSize / 2, -baseSize / 2, baseSize, baseSize);
-
-          // Red accent corners
-          ctx.fillStyle = tower.color;
-          ctx.fillRect(-baseSize / 2, -baseSize / 2, baseSize * 0.15, baseSize * 0.15);
-          ctx.fillRect(baseSize / 2 - baseSize * 0.15, -baseSize / 2, baseSize * 0.15, baseSize * 0.15);
-          ctx.fillRect(-baseSize / 2, baseSize / 2 - baseSize * 0.15, baseSize * 0.15, baseSize * 0.15);
-          ctx.fillRect(baseSize / 2 - baseSize * 0.15, baseSize / 2 - baseSize * 0.15, baseSize * 0.15, baseSize * 0.15);
-
-          ctx.rotate(tower.angle);
-          const recoilOffset = tower.recoil * 2;
-
-          // Very long thin barrel
-          ctx.fillStyle = tower.color;
-          ctx.fillRect(-baseSize * 0.05, -baseSize * 0.07, baseSize * 0.9 - recoilOffset, baseSize * 0.14);
-
-          // Body
-          ctx.beginPath();
-          ctx.arc(0, 0, baseSize * 0.22, 0, Math.PI * 2);
-          ctx.fillStyle = tower.color;
-          ctx.fill();
-
-          // Scope
-          ctx.beginPath();
-          ctx.arc(0, -baseSize * 0.28, baseSize * 0.1, 0, Math.PI * 2);
-          ctx.strokeStyle = tower.color;
-          ctx.lineWidth = 2;
-          ctx.stroke();
-
-          // Scope glint
-          ctx.beginPath();
-          ctx.arc(-baseSize * 0.03, -baseSize * 0.28, baseSize * 0.03, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(255,255,255,0.6)';
-          ctx.fill();
-
-          // Inner body
-          ctx.beginPath();
-          ctx.arc(0, 0, baseSize * 0.12, 0, Math.PI * 2);
-          ctx.fillStyle = '#200a0a';
-          ctx.fill();
-
-          // Muzzle flash (small and sharp)
-          if (tower.muzzleFlash > 0) {
-            ctx.globalAlpha = tower.muzzleFlash;
-            ctx.beginPath();
-            ctx.arc(baseSize * 0.9 - recoilOffset, 0, baseSize * 0.12, 0, Math.PI * 2);
-            ctx.fillStyle = '#ffffff';
-            ctx.shadowBlur = 15;
-            ctx.fill();
-            ctx.globalAlpha = 1;
-          }
-
-        } else if (tower.type === 'FROST') {
-          // Hexagonal crystal shape
-          ctx.rotate(tower.angle + Math.PI / 6); // Rotate for crystal orientation
-
-          // Crystal glow aura
-          const pulse = Math.sin(Date.now() / 400) * 0.15 + 0.85;
-          ctx.globalAlpha = frozen ? 0.3 : 0.6 * pulse;
-          ctx.fillStyle = tower.color;
-          ctx.shadowBlur = boosted ? 30 : 18;
-          ctx.beginPath();
-          for (let i = 0; i < 6; i++) {
-            const a = (i / 6) * Math.PI * 2;
-            const r = baseSize * 0.48;
-            if (i === 0) ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
-            else ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
-          }
-          ctx.closePath();
-          ctx.fill();
-          ctx.globalAlpha = 1;
-
-          // Inner crystal
-          ctx.fillStyle = '#0a1a3a';
-          ctx.shadowBlur = 0;
-          ctx.beginPath();
-          for (let i = 0; i < 6; i++) {
-            const a = (i / 6) * Math.PI * 2;
-            const r = baseSize * 0.28;
-            if (i === 0) ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
-            else ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
-          }
-          ctx.closePath();
-          ctx.fill();
-
-          // Crystal shard lines
-          ctx.strokeStyle = tower.color;
-          ctx.lineWidth = 1.5;
-          ctx.globalAlpha = 0.5;
-          for (let i = 0; i < 6; i++) {
-            const a = (i / 6) * Math.PI * 2;
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(Math.cos(a) * baseSize * 0.45, Math.sin(a) * baseSize * 0.45);
-            ctx.stroke();
-          }
-          ctx.globalAlpha = 1;
-
-          // Center glow
-          ctx.beginPath();
-          ctx.arc(0, 0, baseSize * 0.1, 0, Math.PI * 2);
-          ctx.fillStyle = tower.color;
-          ctx.shadowColor = tower.color;
-          ctx.shadowBlur = 10;
-          ctx.fill();
-
-          // Frost muzzle flash
-          if (tower.muzzleFlash > 0) {
-            ctx.globalAlpha = tower.muzzleFlash * 0.8;
-            ctx.beginPath();
-            ctx.arc(baseSize * 0.45, 0, baseSize * 0.18, 0, Math.PI * 2);
-            ctx.fillStyle = '#aaeeff';
-            ctx.shadowColor = '#aaeeff';
-            ctx.shadowBlur = 20;
-            ctx.fill();
-            ctx.globalAlpha = 1;
-          }
-        }
-
-        ctx.shadowBlur = 0;
         ctx.restore();
       }
     }
 
+    function getWorldOffset() {
+      return {
+        x: screenShake.duration > 0 ? screenShake.x : 0,
+        y: screenShake.duration > 0 ? screenShake.y : 0
+      };
+    }
+
+    function resetWorldTransform() {
+      const offset = getWorldOffset();
+      ctx.setTransform(1, 0, 0, 1, offset.x, offset.y);
+    }
+
+    function setEntityTransform(x, y, angle, scale) {
+      const offset = getWorldOffset();
+      const rotation = angle || 0;
+      const appliedScale = scale === undefined ? 1 : scale;
+      const cos = Math.cos(rotation) * appliedScale;
+      const sin = Math.sin(rotation) * appliedScale;
+      ctx.setTransform(cos, sin, -sin, cos, offset.x + x, offset.y + y);
+    }
+
+    function getEnemyRadius(enemy) {
+      if (enemy.isBoss) return cellSize * 0.55;
+      if (enemy.shape === 'large') return cellSize * 0.46;
+      if (enemy.shape === 'medium') return cellSize * 0.36;
+      return cellSize * 0.32;
+    }
+
+    function getEnemyTrailOpacity(enemy, index) {
+      if (enemy.type === 'SCOUT') return [0.35, 0.15][index] || 0;
+      if (enemy.type === 'SOLDIER') return [0.3][index] || 0;
+      if (enemy.type === 'SPEEDSTER') return [0.5, 0.25, 0.1][index] || 0;
+      if (enemy.isBoss) return [0.3, 0.15][index] || 0;
+      return 0;
+    }
+
+    function getBatch(map, key, create) {
+      if (!map.has(key)) map.set(key, create());
+      return map.get(key);
+    }
+
     function drawEnemies() {
+      const deathFlashes = [];
+      const frostAuraBatches = new Map();
+      const frostShards = [];
+      const trailBatches = new Map();
+      const bodyBatches = new Map();
+      const hitFlashes = [];
+      const hpBars = [];
+
       for (const enemy of enemies) {
+        if (!enemy.active) continue;
+
+        const radius = getEnemyRadius(enemy);
         const cx = (enemy.col + 0.5) * cellSize;
         const cy = (enemy.row + 0.5) * cellSize;
-        let radius = cellSize * 0.32;
-        if (enemy.shape === 'medium') radius = cellSize * 0.36;
-        if (enemy.shape === 'large') radius = cellSize * 0.46;
-        if (enemy.isBoss) radius = cellSize * 0.55;
-
-        // Spawn scale-in animation
+        const angle = enemy.angle || 0;
         const spawnScale = enemy.spawnAnim !== undefined ? Math.max(0.01, 1 - enemy.spawnAnim) : 1;
 
         if (enemy.dying) {
-          // Expanding white circle death flash
-          const scale = 1 + (enemy.deathTimer / 0.15) * 1.5;
-          ctx.globalAlpha = 1 - enemy.deathTimer / 0.15;
-          ctx.fillStyle = '#ffffff';
-          ctx.shadowColor = '#ffffff';
-          ctx.shadowBlur = 20;
-          ctx.beginPath();
-          ctx.arc(cx, cy, radius * scale, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.shadowBlur = 0;
-          ctx.globalAlpha = 1;
+          deathFlashes.push({ cx, cy, radius, deathTimer: enemy.deathTimer });
           continue;
         }
 
-        // Frost slow visual - blue tint overlay with ice shards
         if (enemy.slowTimer > 0) {
+          const frostColor = enemy.slowMult <= ICE_BOMB_SLOW_MULT ? '#a8ecff' : '#4488ff';
           const frostAlpha = enemy.slowMult <= ICE_BOMB_SLOW_MULT ? 0.45 : 0.3;
-          const frostRadius = radius * 1.3;
-
-          // Blue glow circle
-          ctx.globalAlpha = frostAlpha;
-          ctx.fillStyle = enemy.slowMult <= ICE_BOMB_SLOW_MULT ? '#a8ecff' : '#4488ff';
-          ctx.shadowColor = enemy.slowMult <= ICE_BOMB_SLOW_MULT ? '#a8ecff' : '#4488ff';
-          ctx.shadowBlur = 12;
-          ctx.beginPath();
-          ctx.arc(cx, cy, frostRadius, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.shadowBlur = 0;
-          ctx.globalAlpha = 1;
-
-          // Ice crystal shards around the enemy
-          ctx.save();
-          ctx.translate(cx, cy);
-          const shardCount = 6;
-          const frozenAngle = enemy.angle || 0;
-          ctx.rotate(frozenAngle);
-          ctx.strokeStyle = '#88ccff';
-          ctx.lineWidth = 1.5;
-          ctx.globalAlpha = 0.6;
-          for (let s = 0; s < shardCount; s++) {
-            const a = (s / shardCount) * Math.PI * 2;
-            const innerR = radius * 0.9;
-            const outerR = radius * 1.4;
-            ctx.beginPath();
-            ctx.moveTo(Math.cos(a) * innerR, Math.sin(a) * innerR);
-            ctx.lineTo(Math.cos(a) * outerR, Math.sin(a) * outerR);
-            ctx.stroke();
-            // Small crystal tip
-            ctx.beginPath();
-            ctx.moveTo(Math.cos(a - 0.3) * outerR, Math.sin(a - 0.3) * outerR);
-            ctx.lineTo(Math.cos(a) * outerR * 1.15, Math.sin(a) * outerR * 1.15);
-            ctx.lineTo(Math.cos(a + 0.3) * outerR, Math.sin(a + 0.3) * outerR);
-            ctx.stroke();
-          }
-          ctx.globalAlpha = 1;
-          ctx.restore();
+          getBatch(frostAuraBatches, frostColor, function() {
+            return [];
+          }).push({ cx, cy, radius: radius * 1.3, alpha: frostAlpha });
+          frostShards.push({ cx, cy, radius, angle });
         }
 
-        // === Draw speed trail (ghosts) ===
         const trail = enemy.trail || [];
         for (let t = 0; t < trail.length; t++) {
+          const opacity = getEnemyTrailOpacity(enemy, t);
+          if (opacity <= 0) continue;
           const tp = trail[t];
-          const tx = (tp.col + 0.5) * cellSize;
-          const ty = (tp.row + 0.5) * cellSize;
-          let trailOpacity = 0;
-          if (enemy.type === 'SCOUT') {
-            trailOpacity = [0.35, 0.15][t] || 0;
-          } else if (enemy.type === 'SOLDIER') {
-            trailOpacity = [0.3][t] || 0;
-          } else if (enemy.type === 'SPEEDSTER') {
-            trailOpacity = [0.5, 0.25, 0.1][t] || 0;
-          } else if (enemy.isBoss) {
-            trailOpacity = [0.3, 0.15][t] || 0;
-          }
-          if (trailOpacity > 0) {
-            ctx.globalAlpha = trailOpacity;
-            ctx.save();
-            ctx.translate(tx, ty);
-            ctx.rotate(tp.angle || 0);
-            drawEnemyShape(enemy.type, radius * 0.9, enemy.color, true, enemy.bossRotation);
-            ctx.restore();
-          }
-        }
-        ctx.globalAlpha = 1;
-
-        // === Draw main enemy body ===
-        ctx.save();
-        ctx.translate(cx, cy);
-        ctx.rotate(enemy.angle || 0);
-        if (spawnScale < 1) ctx.scale(spawnScale, spawnScale);
-
-        // Boss pulsing glow
-        if (enemy.isBoss) {
-          const pulse = Math.sin(Date.now() / 200) * 0.3 + 0.7;
-          ctx.shadowColor = enemy.type === 'MEGABOSS' ? '#ff0044' : '#aa44ff';
-          ctx.shadowBlur = 20 + pulse * 15;
-        } else {
-          ctx.shadowColor = enemy.color;
-          ctx.shadowBlur = 6;
+          const key = `${enemy.type}|${enemy.color}|${opacity.toFixed(2)}`;
+          getBatch(trailBatches, key, function() {
+            return { type: enemy.type, color: enemy.color, alpha: opacity, items: [] };
+          }).items.push({
+            cx: (tp.col + 0.5) * cellSize,
+            cy: (tp.row + 0.5) * cellSize,
+            angle: tp.angle || 0,
+            radius: radius * 0.9,
+            bossRotation: enemy.bossRotation
+          });
         }
 
-        // Draw the appropriate shape for this enemy type
-        drawEnemyShape(enemy.type, radius, enemy.color, false, enemy.bossRotation);
+        const bodyKey = `${enemy.type}|${enemy.color}`;
+        getBatch(bodyBatches, bodyKey, function() {
+          return { type: enemy.type, color: enemy.color, items: [] };
+        }).items.push({ cx, cy, angle, radius, spawnScale, bossRotation: enemy.bossRotation });
 
         if (enemy.hitFlashFrames > 0) {
-          ctx.globalCompositeOperation = 'screen';
-          ctx.globalAlpha = 1;
-          ctx.shadowColor = '#ffffff';
-          ctx.shadowBlur = 20;
-          drawEnemyShape(enemy.type, radius * 1.02, '#ffffff', false, enemy.bossRotation);
-          enemy.hitFlashFrames--;
+          hitFlashes.push({ enemy, cx, cy, angle, radius, spawnScale, bossRotation: enemy.bossRotation });
         }
 
-        ctx.shadowBlur = 0;
-        ctx.restore();
-
-        // === Thin HP bar (2px, semi-transparent) ===
-        const hpPct = enemy.hp / enemy.maxHP;
-        const barW = radius * 2.2;
-        const barH = 2;
-        const barX = cx - barW / 2;
-        const barY = cy - radius - 10;
-        ctx.globalAlpha = 0.6;
-        ctx.fillStyle = '#1a1a1a';
-        ctx.fillRect(barX, barY, barW, barH);
-        ctx.fillStyle = hpPct > 0.5 ? '#44ff44' : hpPct > 0.25 ? '#ffff44' : '#ff4444';
-        ctx.fillRect(barX, barY, barW * hpPct, barH);
-        ctx.globalAlpha = 1;
+        hpBars.push({
+          cx,
+          cy,
+          radius,
+          hpPct: enemy.hp / enemy.maxHP
+        });
       }
+
+      ctx.fillStyle = '#ffffff';
+      for (const flash of deathFlashes) {
+        const scale = 1 + (flash.deathTimer / 0.15) * 1.5;
+        ctx.globalAlpha = 1 - flash.deathTimer / 0.15;
+        drawGlowSprite(ctx, flash.cx, flash.cy, flash.radius * scale * 1.45, '#ffffff', 0.55);
+        ctx.beginPath();
+        ctx.arc(flash.cx, flash.cy, flash.radius * scale, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
+      for (const [color, items] of frostAuraBatches) {
+        ctx.fillStyle = color;
+        for (const aura of items) {
+          ctx.globalAlpha = aura.alpha;
+          drawGlowSprite(ctx, aura.cx, aura.cy, aura.radius, color, aura.alpha * 0.8);
+          ctx.beginPath();
+          ctx.arc(aura.cx, aura.cy, aura.radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 1;
+
+      ctx.strokeStyle = '#88ccff';
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.6;
+      for (const shard of frostShards) {
+        setEntityTransform(shard.cx, shard.cy, shard.angle, 1);
+        const shardCount = 6;
+        const innerR = shard.radius * 0.9;
+        const outerR = shard.radius * 1.4;
+        for (let s = 0; s < shardCount; s++) {
+          const a = (s / shardCount) * Math.PI * 2;
+          ctx.beginPath();
+          ctx.moveTo(Math.cos(a) * innerR, Math.sin(a) * innerR);
+          ctx.lineTo(Math.cos(a) * outerR, Math.sin(a) * outerR);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(Math.cos(a - 0.3) * outerR, Math.sin(a - 0.3) * outerR);
+          ctx.lineTo(Math.cos(a) * outerR * 1.15, Math.sin(a) * outerR * 1.15);
+          ctx.lineTo(Math.cos(a + 0.3) * outerR, Math.sin(a + 0.3) * outerR);
+          ctx.stroke();
+        }
+      }
+      resetWorldTransform();
+      ctx.globalAlpha = 1;
+
+      for (const batch of trailBatches.values()) {
+        ctx.globalAlpha = batch.alpha;
+        for (const item of batch.items) {
+          setEntityTransform(item.cx, item.cy, item.angle, 1);
+          drawEnemyShape(batch.type, item.radius, batch.color, true, item.bossRotation);
+        }
+      }
+      resetWorldTransform();
+      ctx.globalAlpha = 1;
+
+      const bossGlowPulse = Math.sin(Date.now() / 200) * 0.3 + 0.7;
+      for (const batch of bodyBatches.values()) {
+        for (const item of batch.items) {
+          const glowColor = batch.type === 'MEGABOSS' ? '#ff0044' : batch.type === 'BOSS' ? '#aa44ff' : batch.color;
+          const glowRadius = batch.type === 'MEGABOSS' ? item.radius * 2.0 : batch.type === 'BOSS' ? item.radius * 1.55 : item.radius * 1.1;
+          const glowAlpha = batch.type === 'MEGABOSS' || batch.type === 'BOSS'
+            ? 0.32 + bossGlowPulse * 0.12
+            : 0.18;
+          drawGlowSprite(ctx, item.cx, item.cy, glowRadius, glowColor, glowAlpha);
+        }
+
+        for (const item of batch.items) {
+          setEntityTransform(item.cx, item.cy, item.angle, item.spawnScale < 1 ? item.spawnScale : 1);
+          drawEnemyShape(batch.type, item.radius, batch.color, false, item.bossRotation);
+        }
+      }
+      resetWorldTransform();
+
+      const prevComposite = ctx.globalCompositeOperation;
+      ctx.globalCompositeOperation = 'screen';
+      ctx.globalAlpha = 1;
+      for (const flash of hitFlashes) {
+        setEntityTransform(flash.cx, flash.cy, flash.angle, flash.spawnScale < 1 ? flash.spawnScale : 1);
+        drawGlowSprite(ctx, 0, 0, flash.radius * 1.35, '#ffffff', 0.45);
+        drawEnemyShape(flash.enemy.type, flash.radius * 1.02, '#ffffff', false, flash.bossRotation);
+        flash.enemy.hitFlashFrames--;
+      }
+      ctx.globalCompositeOperation = prevComposite;
+      resetWorldTransform();
+
+      ctx.globalAlpha = 0.6;
+      ctx.fillStyle = '#1a1a1a';
+      for (const bar of hpBars) {
+        const barW = bar.radius * 2.2;
+        const barX = bar.cx - barW / 2;
+        const barY = bar.cy - bar.radius - 10;
+        ctx.fillRect(barX, barY, barW, 2);
+      }
+
+      for (const color of ['#44ff44', '#ffff44', '#ff4444']) {
+        ctx.fillStyle = color;
+        for (const bar of hpBars) {
+          const targetColor = bar.hpPct > 0.5 ? '#44ff44' : bar.hpPct > 0.25 ? '#ffff44' : '#ff4444';
+          if (targetColor !== color) continue;
+          const barW = bar.radius * 2.2;
+          const barX = bar.cx - barW / 2;
+          const barY = bar.cy - bar.radius - 10;
+          ctx.fillRect(barX, barY, barW * bar.hpPct, 2);
+        }
+      }
+
+      ctx.globalAlpha = 1;
+      resetWorldTransform();
     }
 
     // Helper function to draw enemy shapes (assumes ctx is already translated and rotated)
@@ -3381,49 +3763,46 @@
 
         if (!isTrail) {
           // Crown spikes around the edge
-          ctx.save();
-          ctx.rotate(bossRotation || 0);
           const spikeCount = 8;
           ctx.fillStyle = lightenColor(bodyColor, 0.4);
           for (let s = 0; s < spikeCount; s++) {
-            const a = (s / spikeCount) * Math.PI * 2;
-            ctx.save();
-            ctx.rotate(a);
+            const a = (bossRotation || 0) + (s / spikeCount) * Math.PI * 2;
+            const innerX = Math.cos(a) * radius * 0.7;
+            const innerY = Math.sin(a) * radius * 0.7;
+            const tipX = Math.cos(a) * radius * 1.15;
+            const tipY = Math.sin(a) * radius * 1.15;
+            const sideX = -Math.sin(a) * radius * 0.15;
+            const sideY = Math.cos(a) * radius * 0.15;
             ctx.beginPath();
-            ctx.moveTo(radius * 0.7, 0);
-            ctx.lineTo(radius * 1.15, -radius * 0.15);
-            ctx.lineTo(radius * 1.15, radius * 0.15);
+            ctx.moveTo(innerX, innerY);
+            ctx.lineTo(tipX - sideX, tipY - sideY);
+            ctx.lineTo(tipX + sideX, tipY + sideY);
             ctx.closePath();
             ctx.fill();
-            ctx.restore();
           }
-          ctx.restore();
 
           // Rotating inner star/triangle pattern
-          ctx.save();
-          ctx.rotate((bossRotation || 0) * 0.7);
           ctx.fillStyle = innerColor;
           ctx.beginPath();
           for (let s = 0; s < 3; s++) {
-            const a = (s / 3) * Math.PI * 2 - Math.PI / 2;
+            const a = (bossRotation || 0) * 0.7 + (s / 3) * Math.PI * 2 - Math.PI / 2;
             const r = radius * 0.55;
             if (s === 0) ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
             else ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
           }
           ctx.closePath();
           ctx.fill();
-          ctx.restore();
 
           // Pulsing white ring
           const pulse = Math.sin(Date.now() / 150) * 0.3 + 0.7;
-          ctx.strokeStyle = `rgba(255, 255, 255, ${pulse * 0.6})`;
+          ctx.globalAlpha = pulse * 0.6;
+          ctx.strokeStyle = '#ffffff';
           ctx.lineWidth = 2.5;
-          ctx.shadowColor = '#ffffff';
-          ctx.shadowBlur = 10;
+          drawGlowSprite(ctx, 0, 0, radius * 1.25, '#ffffff', pulse * 0.22);
           ctx.beginPath();
           ctx.arc(0, 0, radius * 1.05, 0, Math.PI * 2);
           ctx.stroke();
-          ctx.shadowBlur = 0;
+          ctx.globalAlpha = 1;
 
           // Dark core
           ctx.fillStyle = darkenColor(bodyColor, 0.4);
@@ -3433,47 +3812,43 @@
 
           // Glowing core center
           ctx.fillStyle = lightenColor(bodyColor, 0.5);
+          drawGlowSprite(ctx, 0, 0, radius * 0.35, '#ffffff', 0.3);
           ctx.beginPath();
           ctx.arc(0, 0, radius * 0.15, 0, Math.PI * 2);
-          ctx.shadowColor = '#ffffff';
-          ctx.shadowBlur = 8;
           ctx.fill();
-          ctx.shadowBlur = 0;
         }
       } else if (type === 'MEGABOSS') {
         // Larger, darker red mega boss with double crown spikes and dark aura
         const megaRadius = radius * 1.2;
-        ctx.shadowColor = '#ff0044';
-        ctx.shadowBlur = 30;
+        drawGlowSprite(ctx, 0, 0, megaRadius * 1.45, '#ff0044', 0.42);
         ctx.beginPath();
         ctx.arc(0, 0, megaRadius, 0, Math.PI * 2);
         ctx.fillStyle = bodyColor;
         ctx.fill();
-        ctx.shadowBlur = 0;
 
         if (!isTrail) {
           // Dark aura ring
-          ctx.save();
-          ctx.rotate(bossRotation || 0);
           const spikeCount = 12;
           ctx.fillStyle = darkenColor(bodyColor, 0.3);
           for (let s = 0; s < spikeCount; s++) {
-            const a = (s / spikeCount) * Math.PI * 2;
-            ctx.save();
-            ctx.rotate(a);
+            const a = (bossRotation || 0) + (s / spikeCount) * Math.PI * 2;
+            const innerX = Math.cos(a) * megaRadius * 0.7;
+            const innerY = Math.sin(a) * megaRadius * 0.7;
+            const tipX = Math.cos(a) * megaRadius * 1.3;
+            const tipY = Math.sin(a) * megaRadius * 1.3;
+            const sideX = -Math.sin(a) * megaRadius * 0.12;
+            const sideY = Math.cos(a) * megaRadius * 0.12;
             ctx.beginPath();
-            ctx.moveTo(megaRadius * 0.7, 0);
-            ctx.lineTo(megaRadius * 1.3, -megaRadius * 0.12);
-            ctx.lineTo(megaRadius * 1.3, megaRadius * 0.12);
+            ctx.moveTo(innerX, innerY);
+            ctx.lineTo(tipX - sideX, tipY - sideY);
+            ctx.lineTo(tipX + sideX, tipY + sideY);
             ctx.closePath();
             ctx.fill();
-            ctx.restore();
           }
-          ctx.restore();
 
           // Inner skull-like pattern
-          ctx.save();
-          ctx.rotate((bossRotation || 0) * 0.5);
+          const skullRotation = (bossRotation || 0) * 0.5;
+          ctx.rotate(skullRotation);
           ctx.fillStyle = darkenColor(bodyColor, 0.5);
           ctx.beginPath();
           ctx.arc(0, 0, megaRadius * 0.6, 0, Math.PI * 2);
@@ -3488,15 +3863,17 @@
           ctx.beginPath();
           ctx.arc(0, megaRadius * 0.25, megaRadius * 0.3, 0, Math.PI);
           ctx.fill();
-          ctx.restore();
+          ctx.rotate(-skullRotation);
 
           // Pulsing danger ring
           const pulse = Math.sin(Date.now() / 100) * 0.3 + 0.7;
-          ctx.strokeStyle = `rgba(255, 0, 68, ${pulse})`;
+          ctx.globalAlpha = pulse;
+          ctx.strokeStyle = '#ff0044';
           ctx.lineWidth = 3;
           ctx.beginPath();
           ctx.arc(0, 0, megaRadius * 1.35, 0, Math.PI * 2);
           ctx.stroke();
+          ctx.globalAlpha = 1;
         }
       }
     }
@@ -3530,11 +3907,10 @@
         const endX = frostPos.col * cellSize;
         const endY = frostPos.row * cellSize;
 
+        drawGlowLine(ctx, startX, startY, endX, endY, '#a8ecff', 8, 0.16 * pulse, 10);
         ctx.globalAlpha = 0.18 * pulse;
         ctx.strokeStyle = '#d8f6ff';
         ctx.lineWidth = 6;
-        ctx.shadowColor = '#a8ecff';
-        ctx.shadowBlur = 12;
         ctx.beginPath();
         ctx.moveTo(startX, startY);
         ctx.lineTo(endX, endY);
@@ -3543,7 +3919,6 @@
         ctx.globalAlpha = 0.45 * pulse;
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 2;
-        ctx.shadowBlur = 0;
         ctx.beginPath();
         ctx.moveTo(startX, startY);
         ctx.lineTo(endX, endY);
@@ -3551,11 +3926,18 @@
       }
 
       ctx.globalAlpha = 1;
-      ctx.shadowBlur = 0;
     }
 
     function drawProjectiles() {
+      const mergeBeams = [];
+      const mergeOrbBatches = new Map();
+      const mergeCoreBursts = [];
+      const trailBatches = new Map();
+      const projectileBatches = new Map();
+      const iceBombHalos = [];
+
       for (const proj of projectiles) {
+        if (!proj.active) continue;
         if (proj.phase === 'merge') {
           const progress = 1 - Math.max(0, proj.mergeTimer) / proj.mergeDuration;
           const eased = 1 - Math.pow(1 - progress, 2);
@@ -3565,40 +3947,27 @@
           const orbBRow = proj.sourceB.row + (proj.mergePoint.row - proj.sourceB.row) * eased;
           const mergeX = proj.mergePoint.col * cellSize;
           const mergeY = proj.mergePoint.row * cellSize;
-
-          ctx.globalAlpha = 0.35;
-          ctx.strokeStyle = '#d8f6ff';
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(orbACol * cellSize, orbARow * cellSize);
-          ctx.lineTo(mergeX, mergeY);
-          ctx.moveTo(orbBCol * cellSize, orbBRow * cellSize);
-          ctx.lineTo(mergeX, mergeY);
-          ctx.stroke();
-
-          ctx.globalAlpha = 0.9;
-          ctx.fillStyle = proj.sourceA.color;
-          ctx.shadowColor = proj.sourceA.color;
-          ctx.shadowBlur = 10;
-          ctx.beginPath();
-          ctx.arc(orbACol * cellSize, orbARow * cellSize, 4, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.fillStyle = proj.sourceB.color;
-          ctx.shadowColor = proj.sourceB.color;
-          ctx.beginPath();
-          ctx.arc(orbBCol * cellSize, orbBRow * cellSize, 4, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.globalAlpha = 0.25 + eased * 0.5;
-          ctx.fillStyle = '#a8ecff';
-          ctx.shadowColor = '#a8ecff';
-          ctx.shadowBlur = 18;
-          ctx.beginPath();
-          ctx.arc(mergeX, mergeY, 5 + eased * 4, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.globalAlpha = 1;
-          ctx.shadowBlur = 0;
+          mergeBeams.push({
+            ax: orbACol * cellSize,
+            ay: orbARow * cellSize,
+            bx: orbBCol * cellSize,
+            by: orbBRow * cellSize,
+            mx: mergeX,
+            my: mergeY
+          });
+          getBatch(mergeOrbBatches, proj.sourceA.color, function() {
+            return [];
+          }).push({ x: orbACol * cellSize, y: orbARow * cellSize, radius: 4 });
+          getBatch(mergeOrbBatches, proj.sourceB.color, function() {
+            return [];
+          }).push({ x: orbBCol * cellSize, y: orbBRow * cellSize, radius: 4 });
+          mergeCoreBursts.push({
+            x: mergeX,
+            y: mergeY,
+            radius: 5 + eased * 4,
+            glowRadius: 12 + eased * 6,
+            alpha: 0.25 + eased * 0.5
+          });
           continue;
         }
 
@@ -3606,32 +3975,103 @@
         const py = proj.row * cellSize;
         for (let i = 0; i < proj.trail.length; i++) {
           const t = proj.trail[i];
-          ctx.globalAlpha = 0.3 - i * 0.1;
-          ctx.fillStyle = proj.color;
-          ctx.beginPath();
-          ctx.arc(t.col * cellSize, t.row * cellSize, 3, 0, Math.PI * 2);
-          ctx.fill();
+          const alpha = 0.3 - i * 0.1;
+          if (alpha <= 0) continue;
+          const trailKey = `${proj.color}|${alpha.toFixed(2)}`;
+          getBatch(trailBatches, trailKey, function() {
+            return { color: proj.color, alpha, items: [] };
+          }).items.push({ x: t.col * cellSize, y: t.row * cellSize, radius: 3 });
         }
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = proj.color;
-        ctx.shadowColor = proj.color;
-        ctx.shadowBlur = proj.towerType === 'ICE_BOMB' ? 16 : 8;
-        ctx.beginPath();
-        ctx.arc(px, py, proj.towerType === 'ICE_BOMB' ? 7 : 5, 0, Math.PI * 2);
-        ctx.fill();
+
+        const projectileKey = `${proj.color}|${proj.towerType}`;
+        getBatch(projectileBatches, projectileKey, function() {
+          return {
+            color: proj.color,
+            towerType: proj.towerType,
+            bodyRadius: proj.towerType === 'ICE_BOMB' ? 7 : 5,
+            glowRadius: proj.towerType === 'ICE_BOMB' ? 15 : 10,
+            glowAlpha: proj.towerType === 'ICE_BOMB' ? 0.55 : 0.35,
+            items: []
+          };
+        }).items.push({ x: px, y: py });
+
         if (proj.towerType === 'ICE_BOMB') {
-          ctx.globalAlpha = 0.45;
-          ctx.beginPath();
-          ctx.arc(px, py, 11, 0, Math.PI * 2);
-          ctx.fillStyle = '#ffffff';
-          ctx.fill();
-          ctx.globalAlpha = 1;
+          iceBombHalos.push({ x: px, y: py, radius: 11 });
         }
-        ctx.shadowBlur = 0;
       }
+
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = '#d8f6ff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (const beam of mergeBeams) {
+        ctx.moveTo(beam.ax, beam.ay);
+        ctx.lineTo(beam.mx, beam.my);
+        ctx.moveTo(beam.bx, beam.by);
+        ctx.lineTo(beam.mx, beam.my);
+      }
+      ctx.stroke();
+
+      ctx.globalAlpha = 0.9;
+      for (const [color, items] of mergeOrbBatches) {
+        ctx.fillStyle = color;
+        for (const orb of items) {
+          drawGlowSprite(ctx, orb.x, orb.y, 10, color, 0.42);
+        }
+        ctx.beginPath();
+        for (const orb of items) {
+          ctx.moveTo(orb.x + orb.radius, orb.y);
+          ctx.arc(orb.x, orb.y, orb.radius, 0, Math.PI * 2);
+        }
+        ctx.fill();
+      }
+
+      for (const burst of mergeCoreBursts) {
+        ctx.globalAlpha = burst.alpha;
+        ctx.fillStyle = '#a8ecff';
+        drawGlowSprite(ctx, burst.x, burst.y, burst.glowRadius, '#a8ecff', 0.5);
+        ctx.beginPath();
+        ctx.arc(burst.x, burst.y, burst.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      for (const batch of trailBatches.values()) {
+        ctx.globalAlpha = batch.alpha;
+        ctx.fillStyle = batch.color;
+        ctx.beginPath();
+        for (const item of batch.items) {
+          ctx.moveTo(item.x + item.radius, item.y);
+          ctx.arc(item.x, item.y, item.radius, 0, Math.PI * 2);
+        }
+        ctx.fill();
+      }
+
+      ctx.globalAlpha = 1;
+      for (const batch of projectileBatches.values()) {
+        ctx.fillStyle = batch.color;
+        for (const item of batch.items) {
+          drawGlowSprite(ctx, item.x, item.y, batch.glowRadius, batch.color, batch.glowAlpha);
+        }
+        ctx.beginPath();
+        for (const item of batch.items) {
+          ctx.moveTo(item.x + batch.bodyRadius, item.y);
+          ctx.arc(item.x, item.y, batch.bodyRadius, 0, Math.PI * 2);
+        }
+        ctx.fill();
+      }
+
+      ctx.globalAlpha = 0.45;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      for (const halo of iceBombHalos) {
+        ctx.moveTo(halo.x + halo.radius, halo.y);
+        ctx.arc(halo.x, halo.y, halo.radius, 0, Math.PI * 2);
+      }
+      ctx.fill();
+      ctx.globalAlpha = 1;
     }
 
-    function drawSpawnAndBase() {
+    function drawSpawnAndBase(targetCtx = ctx) {
       const spawnCx = (SPAWN_POS.col + 0.5) * cellSize;
       const spawnCy = (SPAWN_POS.row + 0.5) * cellSize;
       const baseCx = (BASE_POS.col + 0.5) * cellSize;
@@ -3639,25 +4079,21 @@
       const size = cellSize * 0.7;
 
       const spawnPulse = Math.sin(Date.now() / 300) * 0.15 + 1;
-      ctx.fillStyle = '#44ff44';
-      ctx.shadowColor = '#44ff44';
-      ctx.shadowBlur = 15;
-      ctx.fillRect(spawnCx - size * spawnPulse / 2, spawnCy - size * spawnPulse / 2, size * spawnPulse, size * spawnPulse);
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = '#0a0a0f';
-      ctx.font = `bold ${cellSize * 0.35}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('S', spawnCx, spawnCy);
+      drawGlowSprite(targetCtx, spawnCx, spawnCy, size * 0.95 * spawnPulse, '#44ff44', 0.45);
+      targetCtx.fillStyle = '#44ff44';
+      targetCtx.fillRect(spawnCx - size * spawnPulse / 2, spawnCy - size * spawnPulse / 2, size * spawnPulse, size * spawnPulse);
+      targetCtx.fillStyle = '#0a0a0f';
+      targetCtx.font = `bold ${cellSize * 0.35}px sans-serif`;
+      targetCtx.textAlign = 'center';
+      targetCtx.textBaseline = 'middle';
+      targetCtx.fillText('S', spawnCx, spawnCy);
 
       const basePulse = Math.sin(Date.now() / 300) * 0.15 + 1;
-      ctx.fillStyle = '#ff4444';
-      ctx.shadowColor = '#ff4444';
-      ctx.shadowBlur = 15;
-      ctx.fillRect(baseCx - size * basePulse / 2, baseCy - size * basePulse / 2, size * basePulse, size * basePulse);
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = '#0a0a0f';
-      ctx.fillText('B', baseCx, baseCy);
+      drawGlowSprite(targetCtx, baseCx, baseCy, size * 0.95 * basePulse, '#ff4444', 0.45);
+      targetCtx.fillStyle = '#ff4444';
+      targetCtx.fillRect(baseCx - size * basePulse / 2, baseCy - size * basePulse / 2, size * basePulse, size * basePulse);
+      targetCtx.fillStyle = '#0a0a0f';
+      targetCtx.fillText('B', baseCx, baseCy);
     }
 
     function getWavePreviewLines() {
@@ -3694,8 +4130,7 @@
       ctx.fillStyle = '#ffffff';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.shadowColor = '#4ade80';
-      ctx.shadowBlur = 20;
+      drawGlowSprite(ctx, centerX, startY, canvas.width * 0.12, '#4ade80', 0.18);
       const waveLabel = (currentWave <= BASE_WAVES ? `WAVE ${currentWave}` : `WAVE ${currentWave} ∞`) + (stormActive ? ' — ⚡ STORM' : '') + (armoredWave ? ' — 🛡️ ARMORED' : '');
       const maxWaveW = canvas.width * 0.85;
       let waveFontSize = canvas.width * 0.1;
@@ -3705,7 +4140,6 @@
         ctx.font = `bold ${waveFontSize}px -apple-system, sans-serif`;
       }
       ctx.fillText(waveLabel, centerX, startY);
-      ctx.shadowBlur = 0;
 
       // Enemy count lines — scale font to fit
       const maxLineW = canvas.width * 0.85;
@@ -3721,13 +4155,11 @@
         const textWidth = ctx.measureText(line.text).width;
 
         // Color dot indicator
+        drawGlowSprite(ctx, centerX - textWidth / 2 - lineFontSize * 1.2, y, lineFontSize * 0.95, line.color, 0.28);
         ctx.fillStyle = line.color;
-        ctx.shadowColor = line.color;
-        ctx.shadowBlur = 6;
         ctx.beginPath();
         ctx.arc(centerX - textWidth / 2 - lineFontSize * 1.2, y, lineFontSize * 0.6, 0, Math.PI * 2);
         ctx.fill();
-        ctx.shadowBlur = 0;
 
         // Enemy label
         ctx.fillStyle = '#ffffff';
@@ -3743,11 +4175,9 @@
 
       ctx.fillStyle = 'rgba(255,255,255,0.15)';
       ctx.fillRect(barX, barY, barWidth, barHeight);
+      drawGlowLine(ctx, barX, barY + barHeight / 2, barX + barWidth * progress, barY + barHeight / 2, '#4ade80', 6, 0.22, 14);
       ctx.fillStyle = '#4ade80';
-      ctx.shadowColor = '#4ade80';
-      ctx.shadowBlur = 8;
       ctx.fillRect(barX, barY, barWidth * progress, barHeight);
-      ctx.shadowBlur = 0;
     }
 
     // === GAME LOOP ===
@@ -3763,8 +4193,8 @@
         // Frozen - no updates, just keep rendering
       } else if (gameState === GameStates.WAVE_ACTIVE) {
         updateWave(dt);
-        updateTowers(dt);
         updateEnemies(dt);
+        updateTowers(dt);
         updateProjectiles(dt);
         updateHUD();
       }
