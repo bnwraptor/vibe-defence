@@ -2721,6 +2721,14 @@
         drawGlowSprite(lightCtx, deathParticleX[i], deathParticleY[i], Math.max(6, deathParticleSize[i] * 4), '#ffffff', 0.18);
       }
 
+      const markerSize = cellSize * 0.7;
+      const spawnCx = (SPAWN_POS.col + 0.5) * cellSize;
+      const spawnCy = (SPAWN_POS.row + 0.5) * cellSize;
+      const baseCx = (BASE_POS.col + 0.5) * cellSize;
+      const baseCy = (BASE_POS.row + 0.5) * cellSize;
+      drawGlowSprite(lightCtx, spawnCx, spawnCy, markerSize * 1.15, '#ffffff', 0.55);
+      drawGlowSprite(lightCtx, baseCx, baseCy, markerSize * 1.15, '#ffffff', 0.55);
+
       lightCtx.globalCompositeOperation = 'source-over';
       lightCtx.restore();
     }
@@ -4086,7 +4094,7 @@
       targetCtx.font = `bold ${cellSize * 0.35}px sans-serif`;
       targetCtx.textAlign = 'center';
       targetCtx.textBaseline = 'middle';
-      targetCtx.fillText('S', spawnCx, spawnCy);
+      targetCtx.fillText('A', spawnCx, spawnCy);
 
       const basePulse = Math.sin(Date.now() / 300) * 0.15 + 1;
       drawGlowSprite(targetCtx, baseCx, baseCy, size * 0.95 * basePulse, '#ff4444', 0.45);
