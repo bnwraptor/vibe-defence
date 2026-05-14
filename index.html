@@ -349,6 +349,13 @@
     const COLS = 12;
     const ROWS = 16;
     const CELL_TYPES = { EMPTY: 0, BLOCKED: 1, SPAWN: 2, BASE: 3, TOWER: 4, PATH: 5 };
+    const TERRAIN_TYPES = { NONE: 'NONE', MUD: 'MUD', ICE: 'ICE', HIGH_GROUND: 'HIGH_GROUND' };
+    const TERRAIN_DATA = {
+      NONE: { speedMult: 1, towerRangeMult: 1 },
+      MUD: { speedMult: 0.6, towerRangeMult: 1, color: '#4b2e1f' },
+      ICE: { speedMult: 1.3, towerRangeMult: 1, color: '#9edcff', blocksLock: true },
+      HIGH_GROUND: { speedMult: 1, towerRangeMult: 1.2, color: '#7c6f5b' }
+    };
     const SPAWN_POS = { col: 0, row: 7 };
     const BASE_POS = { col: 11, row: 7 };
     const STARTING_TILE_BUDGET = 20;  // wave 1 total tiles
@@ -402,6 +409,11 @@
     const SPAWN_INTERVAL = 0.8;
     const WAVE_DELAY = 3;
     const PROJ_SPEED = 480;
+    const ICE_BOMB_SPLASH_MULT = 1.5;
+    const ICE_BOMB_SPLASH_RADIUS = 2;
+    const ICE_BOMB_SLOW_MULT = 0.2;
+    const ICE_BOMB_SLOW_DUR = 1.5;
+    const ICE_BOMB_MERGE_TIME = 0.18;
     const TOWER_TYPES = {
       TURRET: { color: '#00ffff', range: 3, fireRate: 0.5, damage: 10, targeting: 'nearest' },
       CANNON: { color: '#ff8800', range: 2, fireRate: 2, damage: 40, targeting: 'first', ability: 'splash', splashRadius: 1.0, splashDamage: 0.4 },
@@ -435,11 +447,13 @@
     const GameStates = { MENU: 'MENU', PLANNING: 'PLANNING', WAVE_ACTIVE: 'WAVE_ACTIVE', PAUSED: 'PAUSED', GAME_OVER: 'GAME_OVER', VICTORY: 'VICTORY' };
     let gameState = GameStates.MENU;
     let grid = [];
+    let terrainGrid = [];
     let towers = [];
     let enemies = [];
     let projectiles = [];
     let deathParticles = [];  // {x, y, vx, vy, color, size, life, maxLife}
     let splashRings = [];  // {col, row, radius, life}
+    let towerSynergies = [];
     let hitNumbers = [];       // {x, y, text, color, life, vy}
     let goldPickups = [];    // {x, y, text, life, vy}
     let pathTiles = [];
@@ -515,24 +529,96 @@
     // === GRID ===
     function initGrid() {
       grid = [];
+      terrainGrid = [];
       for (let row = 0; row < ROWS; row++) {
         grid[row] = [];
+        terrainGrid[row] = [];
         for (let col = 0; col < COLS; col++) {
           grid[row][col] = CELL_TYPES.EMPTY;
+          terrainGrid[row][col] = TERRAIN_TYPES.NONE;
         }
       }
       grid[SPAWN_POS.row][SPAWN_POS.col] = CELL_TYPES.SPAWN;
       grid[BASE_POS.row][BASE_POS.col] = CELL_TYPES.BASE;
+      sprinkleTerrainPatches(TERRAIN_TYPES.MUD, 4, 4, 7);
+      sprinkleTerrainPatches(TERRAIN_TYPES.ICE, 3, 3, 5);
+      sprinkleTerrainPatches(TERRAIN_TYPES.HIGH_GROUND, 4, 2, 4);
     }
 
     function getCellAt(col, row) {
       if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return null;
-      return grid[row][col];
+      return {
+        type: grid[row][col],
+        terrain: terrainGrid[row][col],
+        col,
+        row
+      };
+    }
+
+    function getCellTypeAt(col, row) {
+      const cell = getCellAt(col, row);
+      return cell ? cell.type : null;
+    }
+
+    function getTerrainAt(col, row) {
+      const cell = getCellAt(col, row);
+      return cell ? cell.terrain : TERRAIN_TYPES.NONE;
+    }
+
+    function isTerrainSeedAllowed(col, row) {
+      const cellType = getCellTypeAt(col, row);
+      return cellType !== null && cellType !== CELL_TYPES.SPAWN && cellType !== CELL_TYPES.BASE;
+    }
+
+    function sprinkleTerrainPatches(terrainType, patchCount, minSize, maxSize) {
+      const dirs = [
+        { col: 1, row: 0 }, { col: -1, row: 0 }, { col: 0, row: 1 }, { col: 0, row: -1 },
+        { col: 1, row: 1 }, { col: -1, row: 1 }, { col: 1, row: -1 }, { col: -1, row: -1 }
+      ];
+
+      for (let patch = 0; patch < patchCount; patch++) {
+        let seed = null;
+        for (let attempt = 0; attempt < 30 && !seed; attempt++) {
+          const col = Math.floor(Math.random() * COLS);
+          const row = Math.floor(Math.random() * ROWS);
+          if (isTerrainSeedAllowed(col, row)) {
+            seed = { col, row };
+          }
+        }
+        if (!seed) continue;
+
+        const targetSize = minSize + Math.floor(Math.random() * (maxSize - minSize + 1));
+        let placed = 0;
+        let current = seed;
+        const visited = new Set();
+        let steps = 0;
+
+        while (placed < targetSize && steps < targetSize * 10) {
+          steps++;
+          const key = `${current.col},${current.row}`;
+          if (isTerrainSeedAllowed(current.col, current.row) && !visited.has(key)) {
+            visited.add(key);
+            if (terrainGrid[current.row][current.col] === TERRAIN_TYPES.NONE) {
+              terrainGrid[current.row][current.col] = terrainType;
+              placed++;
+            }
+          }
+
+          const dir = dirs[Math.floor(Math.random() * dirs.length)];
+          const nextCol = Math.max(0, Math.min(COLS - 1, current.col + dir.col));
+          const nextRow = Math.max(0, Math.min(ROWS - 1, current.row + dir.row));
+          if (isTerrainSeedAllowed(nextCol, nextRow)) {
+            current = { col: nextCol, row: nextRow };
+          } else {
+            current = seed;
+          }
+        }
+      }
     }
 
     function isCellOccupied(col, row) {
       const cell = getCellAt(col, row);
-      return cell === CELL_TYPES.BLOCKED || cell === CELL_TYPES.SPAWN || cell === CELL_TYPES.BASE || cell === CELL_TYPES.TOWER;
+      return cell && (cell.type === CELL_TYPES.BLOCKED || cell.type === CELL_TYPES.SPAWN || cell.type === CELL_TYPES.BASE || cell.type === CELL_TYPES.TOWER);
     }
 
     // === PATH ===
@@ -542,7 +628,7 @@
         return false;
       }
       const cell = getCellAt(col, row);
-      if (cell !== CELL_TYPES.EMPTY) {
+      if (!cell || cell.type !== CELL_TYPES.EMPTY) {
         return false;
       }
       if (isPathTile(col, row)) {
@@ -651,6 +737,133 @@
       return pathTiles.slice(); // return copy in draw-order
     }
 
+    function getPathAnchorPoints(includeBase = false, allowDirect = false) {
+      const ordered = getOrderedPath();
+      if (ordered.length === 0) {
+        if (!allowDirect) return [];
+        return [
+          { x: SPAWN_POS.col, y: SPAWN_POS.row },
+          { x: BASE_POS.col, y: BASE_POS.row }
+        ];
+      }
+
+      const anchors = [{ x: SPAWN_POS.col, y: SPAWN_POS.row }];
+      for (const tile of ordered) {
+        anchors.push({ x: tile.col, y: tile.row });
+      }
+
+      const last = ordered[ordered.length - 1];
+      if (includeBase || isAdjacent(last.col, last.row, BASE_POS.col, BASE_POS.row)) {
+        anchors.push({ x: BASE_POS.col, y: BASE_POS.row });
+      }
+
+      return anchors;
+    }
+
+    function getCatmullRomSegments(points) {
+      if (points.length < 2) return [];
+      const segments = [];
+
+      for (let i = 0; i < points.length - 1; i++) {
+        const p0 = points[i - 1] || points[i];
+        const p1 = points[i];
+        const p2 = points[i + 1];
+        const p3 = points[i + 2] || p2;
+
+        segments.push({
+          start: { x: p1.x, y: p1.y },
+          cp1: {
+            x: p1.x + (p2.x - p0.x) / 6,
+            y: p1.y + (p2.y - p0.y) / 6
+          },
+          cp2: {
+            x: p2.x - (p3.x - p1.x) / 6,
+            y: p2.y - (p3.y - p1.y) / 6
+          },
+          end: { x: p2.x, y: p2.y }
+        });
+      }
+
+      return segments;
+    }
+
+    function getBezierPoint(segment, t) {
+      const mt = 1 - t;
+      const mt2 = mt * mt;
+      const t2 = t * t;
+      const a = mt2 * mt;
+      const b = 3 * mt2 * t;
+      const c = 3 * mt * t2;
+      const d = t * t2;
+
+      return {
+        x: a * segment.start.x + b * segment.cp1.x + c * segment.cp2.x + d * segment.end.x,
+        y: a * segment.start.y + b * segment.cp1.y + c * segment.cp2.y + d * segment.end.y
+      };
+    }
+
+    function buildSplineSamples(segments, resolution = 12) {
+      if (!segments.length) return [];
+      const samples = [{ x: segments[0].start.x, y: segments[0].start.y, distance: 0 }];
+      let totalDistance = 0;
+      let last = samples[0];
+
+      for (const segment of segments) {
+        for (let step = 1; step <= resolution; step++) {
+          const point = getBezierPoint(segment, step / resolution);
+          totalDistance += Math.hypot(point.x - last.x, point.y - last.y);
+          samples.push({ x: point.x, y: point.y, distance: totalDistance });
+          last = point;
+        }
+      }
+
+      return samples;
+    }
+
+    function getPathSplineData(options) {
+      const opts = options || {};
+      const anchors = getPathAnchorPoints(!!opts.includeBase, !!opts.allowDirect);
+      if (anchors.length < 2) {
+        return { anchors, segments: [], samples: [], totalLength: 0 };
+      }
+
+      const segments = getCatmullRomSegments(anchors);
+      const samples = buildSplineSamples(segments, opts.resolution || 12);
+      const totalLength = samples.length ? samples[samples.length - 1].distance : 0;
+      return { anchors, segments, samples, totalLength };
+    }
+
+    function getPointOnSpline(pathData, distance) {
+      if (!pathData.samples.length) {
+        const fallback = pathData.anchors[0] || { x: SPAWN_POS.col, y: SPAWN_POS.row };
+        return { x: fallback.x, y: fallback.y };
+      }
+
+      if (distance <= 0) {
+        return { x: pathData.samples[0].x, y: pathData.samples[0].y };
+      }
+      if (distance >= pathData.totalLength) {
+        const end = pathData.samples[pathData.samples.length - 1];
+        return { x: end.x, y: end.y };
+      }
+
+      for (let i = 1; i < pathData.samples.length; i++) {
+        const prev = pathData.samples[i - 1];
+        const next = pathData.samples[i];
+        if (distance <= next.distance) {
+          const span = Math.max(0.0001, next.distance - prev.distance);
+          const t = (distance - prev.distance) / span;
+          return {
+            x: prev.x + (next.x - prev.x) * t,
+            y: prev.y + (next.y - prev.y) * t
+          };
+        }
+      }
+
+      const last = pathData.samples[pathData.samples.length - 1];
+      return { x: last.x, y: last.y };
+    }
+
     // === TOWERS ===
     // Tower spots — candidate positions spread across the grid, avoiding SPAWN (0,7) and BASE (11,7)
     const TOWER_SPOTS = [
@@ -697,94 +910,266 @@
         t.aoeRadius = typeData.aoeRadius || 0;
         t.pierce = typeData.ability === 'pierce';
         t.targeting = typeData.targeting || 'nearest';
+        t.highGroundBoost = isTowerNearTerrainType(t, TERRAIN_TYPES.HIGH_GROUND);
         grid[t.row][t.col] = CELL_TYPES.TOWER;
       }
     }
 
+    function isTowerNearTerrainType(tower, terrainType) {
+      for (let row = tower.row - 1; row <= tower.row + 1; row++) {
+        for (let col = tower.col - 1; col <= tower.col + 1; col++) {
+          if (getTerrainAt(col, row) !== terrainType) continue;
+          if (Math.hypot(col - tower.col, row - tower.row) <= 1.5) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    function getTowerEffectiveRange(tower) {
+      return tower.range * (tower.highGroundBoost ? TERRAIN_DATA[TERRAIN_TYPES.HIGH_GROUND].towerRangeMult : 1);
+    }
+
+    function getEnemyTerrain(enemy) {
+      return getTerrainAt(Math.floor(enemy.x !== undefined ? enemy.x : enemy.col), Math.floor(enemy.y !== undefined ? enemy.y : enemy.row));
+    }
+
+    function canTowerLockEnemy(enemy) {
+      const terrain = getEnemyTerrain(enemy);
+      return !TERRAIN_DATA[terrain].blocksLock;
+    }
+
+    function getTowerCenter(tower) {
+      return { col: tower.col + 0.5, row: tower.row + 0.5 };
+    }
+
+    function getTowerToEnemyDistance(tower, enemy) {
+      const towerPos = getTowerCenter(tower);
+      return Math.hypot(enemy.col + 0.5 - towerPos.col, enemy.row + 0.5 - towerPos.row);
+    }
+
+    function getEnemiesInRange(tower, rangeOverride) {
+      const range = rangeOverride !== undefined ? rangeOverride : getTowerEffectiveRange(tower);
+      return enemies.filter(enemy => !enemy.dying && canTowerLockEnemy(enemy) && getTowerToEnemyDistance(tower, enemy) <= range);
+    }
+
+    function compareTargetsForTower(tower, a, b) {
+      const mode = tower.targeting || 'nearest';
+      switch (mode) {
+        case 'first':
+          return b.pathIndex - a.pathIndex || getTowerToEnemyDistance(tower, a) - getTowerToEnemyDistance(tower, b);
+        case 'last':
+          return a.pathIndex - b.pathIndex || getTowerToEnemyDistance(tower, a) - getTowerToEnemyDistance(tower, b);
+        case 'weakest':
+          return a.hp - b.hp || getTowerToEnemyDistance(tower, a) - getTowerToEnemyDistance(tower, b);
+        case 'strongest':
+          return b.hp - a.hp || getTowerToEnemyDistance(tower, a) - getTowerToEnemyDistance(tower, b);
+        case 'nearest':
+        default:
+          return getTowerToEnemyDistance(tower, a) - getTowerToEnemyDistance(tower, b);
+      }
+    }
+
+    function selectTargetForTower(tower, candidates) {
+      const inRange = (candidates || getEnemiesInRange(tower)).filter(enemy => !enemy.dying && canTowerLockEnemy(enemy));
+      if (!inRange.length) return null;
+      return inRange.slice().sort((a, b) => compareTargetsForTower(tower, a, b))[0];
+    }
+
+    function getTargetRanks(tower, candidates) {
+      const ordered = candidates.slice().sort((a, b) => compareTargetsForTower(tower, a, b));
+      return new Map(ordered.map((enemy, index) => [enemy, index]));
+    }
+
+    function selectSynergyTarget(cannon, frost) {
+      const sharedEnemies = enemies.filter(enemy => {
+        if (enemy.dying) return false;
+        if (!canTowerLockEnemy(enemy)) return false;
+        return getTowerToEnemyDistance(cannon, enemy) <= getTowerEffectiveRange(cannon)
+          && getTowerToEnemyDistance(frost, enemy) <= getTowerEffectiveRange(frost);
+      });
+      if (!sharedEnemies.length) return null;
+
+      const cannonRanks = getTargetRanks(cannon, sharedEnemies);
+      const frostRanks = getTargetRanks(frost, sharedEnemies);
+
+      return sharedEnemies.slice().sort((a, b) => {
+        const scoreA = cannonRanks.get(a) + frostRanks.get(a);
+        const scoreB = cannonRanks.get(b) + frostRanks.get(b);
+        if (scoreA !== scoreB) return scoreA - scoreB;
+        return compareTargetsForTower(cannon, a, b) || compareTargetsForTower(frost, a, b);
+      })[0];
+    }
+
+    function getTowerSynergies() {
+      const overlapCandidates = [];
+      const cannons = towers.filter(tower => tower.type === 'CANNON');
+      const frosts = towers.filter(tower => tower.type === 'FROST');
+
+      for (const cannon of cannons) {
+        const cannonPos = getTowerCenter(cannon);
+        for (const frost of frosts) {
+          const frostPos = getTowerCenter(frost);
+          const distance = Math.hypot(frostPos.col - cannonPos.col, frostPos.row - cannonPos.row);
+          if (distance <= getTowerEffectiveRange(cannon) + getTowerEffectiveRange(frost)) {
+            overlapCandidates.push({ cannon, frost, distance });
+          }
+        }
+      }
+
+      overlapCandidates.sort((a, b) => a.distance - b.distance);
+      const paired = new Set();
+      return overlapCandidates.filter(link => {
+        if (paired.has(link.cannon) || paired.has(link.frost)) return false;
+        paired.add(link.cannon);
+        paired.add(link.frost);
+        return true;
+      });
+    }
+
+    function aimTowerAtTarget(tower, target) {
+      if (!target) return;
+      const towerPos = getTowerCenter(tower);
+      tower.angle = Math.atan2(target.row + 0.5 - towerPos.row, target.col + 0.5 - towerPos.col);
+    }
+
+    function getEffectiveTowerStats(tower, boosted) {
+      return {
+        fireRate: boosted ? tower.fireRate * 0.5 : tower.fireRate,
+        damage: boosted ? tower.damage * 2 : tower.damage
+      };
+    }
+
+    function applySlow(enemy, duration, multiplier) {
+      if (!enemy || enemy.dying) return;
+      const hadSlow = (enemy.slowTimer || 0) > 0;
+      enemy.slowTimer = Math.max(enemy.slowTimer || 0, duration);
+      if (!hadSlow || enemy.slowMult === undefined) {
+        enemy.slowMult = multiplier;
+      } else {
+        enemy.slowMult = Math.min(enemy.slowMult, multiplier);
+      }
+    }
+
+    function triggerTowerFire(tower, fireRate) {
+      tower.cooldown = fireRate;
+      tower.muzzleFlash = 1.0;
+      tower.recoil = 1.0;
+    }
+
+    function applyFrostAura(tower) {
+      if (tower.type !== 'FROST' || !tower.aoeRadius) return;
+      for (const enemy of enemies) {
+        const dist = Math.hypot(enemy.col - tower.col, enemy.row - tower.row);
+        if (dist <= tower.aoeRadius) {
+          applySlow(enemy, 1.0, tower.slow || 0.5);
+        }
+      }
+    }
+
+    function fireTowerProjectile(tower, targetEnemy, boosted) {
+      const stats = getEffectiveTowerStats(tower, boosted);
+      triggerTowerFire(tower, stats.fireRate);
+      applyFrostAura(tower);
+
+      projectiles.push({
+        col: tower.col + 0.5,
+        row: tower.row + 0.5,
+        target: targetEnemy,
+        damage: stats.damage,
+        color: tower.color,
+        slow: tower.slow,
+        slowDuration: tower.slow ? 1.0 : 0,
+        trail: [],
+        boosted: boosted,
+        towerType: tower.type,
+        pierce: tower.type === 'SNIPER' ? true : false,
+        splashRadius: tower.type === 'CANNON' ? tower.splashRadius : 0,
+        splashDamage: tower.type === 'CANNON' ? Math.round(stats.damage * tower.splashDamage) : 0,
+        splashColor: tower.type === 'CANNON' ? tower.color : null
+      });
+      playShootSound();
+    }
+
+    function fireSynergyProjectile(cannon, frost, targetEnemy, boosted) {
+      const cannonStats = getEffectiveTowerStats(cannon, boosted);
+      const frostStats = getEffectiveTowerStats(frost, boosted);
+      triggerTowerFire(cannon, cannonStats.fireRate);
+      triggerTowerFire(frost, frostStats.fireRate);
+      applyFrostAura(frost);
+
+      const cannonPos = getTowerCenter(cannon);
+      const frostPos = getTowerCenter(frost);
+      const targetCol = targetEnemy.col + 0.5;
+      const targetRow = targetEnemy.row + 0.5;
+      const towerMidCol = (cannonPos.col + frostPos.col) / 2;
+      const towerMidRow = (cannonPos.row + frostPos.row) / 2;
+      const mergeCol = (towerMidCol + targetCol) / 2;
+      const mergeRow = (towerMidRow + targetRow) / 2;
+
+      projectiles.push({
+        type: 'ICE_BOMB',
+        phase: 'merge',
+        mergeTimer: ICE_BOMB_MERGE_TIME,
+        mergeDuration: ICE_BOMB_MERGE_TIME,
+        mergePoint: { col: mergeCol, row: mergeRow },
+        sourceA: { col: cannonPos.col, row: cannonPos.row, color: cannon.color },
+        sourceB: { col: frostPos.col, row: frostPos.row, color: frost.color },
+        col: mergeCol,
+        row: mergeRow,
+        target: targetEnemy,
+        damage: cannonStats.damage + frostStats.damage,
+        color: '#a8ecff',
+        slow: ICE_BOMB_SLOW_MULT,
+        slowDuration: ICE_BOMB_SLOW_DUR,
+        trail: [],
+        boosted: boosted,
+        towerType: 'ICE_BOMB',
+        pierce: false,
+        splashRadius: ICE_BOMB_SPLASH_RADIUS,
+        splashDamage: Math.round(cannonStats.damage * ICE_BOMB_SPLASH_MULT),
+        splashColor: '#a8ecff'
+      });
+      playShootSound();
+    }
+
     function updateTowers(dt) {
+      const boosted = powerBoostTimer > 0;
+      towerSynergies = getTowerSynergies();
+      const syncedTargets = new Map();
+
+      for (const link of towerSynergies) {
+        link.target = selectSynergyTarget(link.cannon, link.frost);
+        if (link.target) {
+          syncedTargets.set(link.cannon, link.target);
+          syncedTargets.set(link.frost, link.target);
+        }
+      }
+
       for (const tower of towers) {
         tower.cooldown = Math.max(0, tower.cooldown - dt);
-
-        // Always track angle toward nearest enemy (for visual rotation)
-        const towerX = tower.col + 0.5;
-        const towerY = tower.row + 0.5;
-        let nearestEnemy = null;
-        let nearestDist = Infinity;
-        for (const enemy of enemies) {
-          const dist = Math.hypot(enemy.col + 0.5 - towerX, enemy.row + 0.5 - towerY);
-          if (dist <= tower.range && dist < nearestDist) {
-            nearestDist = dist;
-            nearestEnemy = enemy;
-          }
-        }
-        if (nearestEnemy) {
-          tower.angle = Math.atan2(nearestEnemy.row + 0.5 - towerY, nearestEnemy.col + 0.5 - towerX);
-        }
-
-        // Decay recoil and muzzle flash
         if (tower.recoil > 0) tower.recoil = Math.max(0, tower.recoil - dt * 10);
         if (tower.muzzleFlash > 0) tower.muzzleFlash = Math.max(0, tower.muzzleFlash - dt * 20);
-
-        if (tower.cooldown > 0) continue;
-
-        // Boost: faster fire rate and double damage
-        const boosted = powerBoostTimer > 0;
-        const effectiveFireRate = boosted ? tower.fireRate * 0.5 : tower.fireRate;
-        const effectiveDamage = boosted ? tower.damage * 2 : tower.damage;
-
-        if (nearestEnemy) {
-          tower.cooldown = effectiveFireRate;
-          tower.muzzleFlash = 1.0;
-          tower.recoil = 1.0;
-
-          // Frost AoE slow: apply to all enemies in range on each frost shot
-          if (tower.type === 'FROST' && tower.aoeRadius) {
-            for (const enemy of enemies) {
-              const dist = Math.hypot(enemy.col - tower.col, enemy.row - tower.row);
-              if (dist <= tower.aoeRadius) {
-                enemy.slowTimer = Math.max(enemy.slowTimer || 0, 1.0);
-              }
-            }
-          }
-
-          // Find target based on targeting mode
-          const tgt = tower.targeting || 'nearest';
-          let targetEnemy = nearestEnemy;
-          if (tgt !== 'nearest') {
-            const inRange = enemies.filter(e => {
-              const d = Math.hypot(e.col - tower.col, e.row - tower.row);
-              return d <= tower.range;
-            });
-            if (inRange.length > 1) {
-              switch (tgt) {
-                case 'first':
-                  targetEnemy = inRange.reduce(function(a,b){return a.pathIndex > b.pathIndex ? a : b}); break;
-                case 'last':
-                  targetEnemy = inRange.reduce(function(a,b){return a.pathIndex < b.pathIndex ? a : b}); break;
-                case 'weakest':
-                  targetEnemy = inRange.reduce(function(a,b){return a.hp < b.hp ? a : b}); break;
-                case 'strongest':
-                  targetEnemy = inRange.reduce(function(a,b){return a.hp > b.hp ? a : b}); break;
-              }
-            }
-          }
-
-          projectiles.push({
-            col: tower.col + 0.5,
-            row: tower.row + 0.5,
-            target: targetEnemy,
-            damage: effectiveDamage,
-            color: tower.color,
-            slow: tower.slow,
-            trail: [],
-            boosted: boosted,
-            towerType: tower.type,
-            pierce: tower.type === 'SNIPER' ? true : false,
-            splashRadius: tower.type === 'CANNON' ? tower.splashRadius : 0,
-            splashDamage: tower.type === 'CANNON' ? Math.round(effectiveDamage * tower.splashDamage) : 0
-          });
-          playShootSound();
+        tower.currentTarget = syncedTargets.get(tower) || selectTargetForTower(tower);
+        if (tower.currentTarget) {
+          aimTowerAtTarget(tower, tower.currentTarget);
         }
+      }
+
+      const synergyShots = new Set();
+      for (const link of towerSynergies) {
+        if (!link.target) continue;
+        if (link.cannon.cooldown > 0 || link.frost.cooldown > 0) continue;
+        fireSynergyProjectile(link.cannon, link.frost, link.target, boosted);
+        synergyShots.add(link.cannon);
+        synergyShots.add(link.frost);
+      }
+
+      for (const tower of towers) {
+        if (synergyShots.has(tower) || tower.cooldown > 0) continue;
+        if (!tower.currentTarget || tower.currentTarget.dying || !enemies.includes(tower.currentTarget)) continue;
+        fireTowerProjectile(tower, tower.currentTarget, boosted);
       }
     }
 
@@ -798,6 +1183,8 @@
       const speed = typeData.speed * waveSpeedMult * currentDifficulty.enemySpeedScale * (stormActive ? 1.2 : 1);
       enemies.push({
         type,
+        x: SPAWN_POS.col,
+        y: SPAWN_POS.row,
         col: SPAWN_POS.col,
         row: SPAWN_POS.row,
         prevCol: SPAWN_POS.col,
@@ -813,6 +1200,9 @@
         armor: (typeData.armor || 0) + (armoredWave ? 10 : 0),
         pathIndex: 0,
         slowTimer: 0,
+        slowMult: 1,
+        stunTimer: 0,
+        hitFlashFrames: 0,
         deathTimer: 0,
         dying: false,
         spawnAnim: 1.0,
@@ -833,6 +1223,8 @@
     }
 
     function updateEnemies(dt) {
+      const pathData = getPathSplineData({ includeBase: true, allowDirect: true, resolution: 14 });
+
       for (let i = enemies.length - 1; i >= 0; i--) {
         const enemy = enemies[i];
 
@@ -849,6 +1241,13 @@
 
         if (enemy.slowTimer > 0) {
           enemy.slowTimer -= dt;
+          if (enemy.slowTimer <= 0) {
+            enemy.slowTimer = 0;
+            enemy.slowMult = 1;
+          }
+        }
+        if (enemy.stunTimer > 0) {
+          enemy.stunTimer -= dt;
         }
         // Spawn scale-in animation
         if (enemy.spawnAnim > 0) {
@@ -856,73 +1255,53 @@
           if (enemy.spawnAnim < 0) enemy.spawnAnim = 0;
         }
 
-        const speedMod = (enemy.slowTimer > 0 ? 0.5 : 1) * (powerFreezeTimer > 0 ? 0 : 1);
+        enemy.terrainType = getEnemyTerrain(enemy);
+        const terrainSpeedMult = TERRAIN_DATA[enemy.terrainType].speedMult || 1;
+        const speedMod = (enemy.slowTimer > 0 ? (enemy.slowMult || 1) : 1) * terrainSpeedMult * (powerFreezeTimer > 0 ? 0 : 1) * (enemy.stunTimer > 0 ? 0 : 1);
         const moveSpeed = enemy.speed * speedMod * dt;
+        const pathLength = pathData.totalLength;
 
-        let targetCol, targetRow;
-        const orderedPath = getOrderedPath();
-
-        if (orderedPath.length > 0) {
-          const pathIdx = Math.floor(enemy.pathIndex);
-          if (pathIdx < orderedPath.length) {
-            targetCol = orderedPath[pathIdx].col;
-            targetRow = orderedPath[pathIdx].row;
-          } else {
-            targetCol = BASE_POS.col;
-            targetRow = BASE_POS.row;
-          }
-        } else {
-          targetCol = BASE_POS.col;
-          targetRow = BASE_POS.row;
-        }
-
-        const dx = targetCol - enemy.col;
-        const dy = targetRow - enemy.row;
-        const dist = Math.hypot(dx, dy);
-
-        // Only advance path when actually moving (moveSpeed > 0 means not frozen)
-        if (dist < 0.1) {
-          if (moveSpeed > 0) {
-            enemy.pathIndex++;
-            enemy.prevCol = enemy.col;
-            enemy.prevRow = enemy.row;
-          }
-          if (Math.hypot(enemy.col - BASE_POS.col, enemy.row - BASE_POS.row) < 0.2) {
-            const damage = Math.ceil(enemy.maxHP * 0.1);
-            baseHP -= damage;
-            screenShake.duration = 0.2;
-            playBaseDamageSound();
-            enemies.splice(i, 1);
-            if (baseHP <= 0) {
-              baseHP = 0;
-              gameState = GameStates.GAME_OVER;
-              // Save records before showing overlay
-              const finalScore = currency + (currentWave - 1) * 100;
-              const wavesDone = currentWave - 1;
-              if (wavesDone > bestWave) {
-                bestWave = wavesDone;
-                localStorage.setItem('vibe-bestWave', bestWave.toString());
-              }
-              if (finalScore > bestScore) {
-                bestScore = finalScore;
-                localStorage.setItem('vibe-bestScore', bestScore.toString());
-              }
-              showOverlay('GAME_OVER');
-            }
-            continue;
-          }
-        } else if (moveSpeed > 0) {
-          // Track angle for facing direction
-          enemy.angle = Math.atan2(dy, dx);
+        if (moveSpeed > 0 && pathLength > 0) {
+          enemy.pathIndex = Math.min(pathLength, Math.max(0, enemy.pathIndex + moveSpeed));
+          const currentPoint = getPointOnSpline(pathData, enemy.pathIndex);
+          const lookAhead = getPointOnSpline(pathData, Math.min(pathLength, enemy.pathIndex + 0.08));
+          enemy.angle = Math.atan2(lookAhead.y - currentPoint.y, lookAhead.x - currentPoint.x);
           enemy.prevCol = enemy.col;
           enemy.prevRow = enemy.row;
-          enemy.col += (dx / dist) * moveSpeed;
-          enemy.row += (dy / dist) * moveSpeed;
+          enemy.x = currentPoint.x;
+          enemy.y = currentPoint.y;
+          enemy.col = enemy.x;
+          enemy.row = enemy.y;
 
           // Update trail for speed effect
           enemy.trail.unshift({ col: enemy.col, row: enemy.row, angle: enemy.angle });
           const maxTrail = enemy.type === 'SPEEDSTER' ? 3 : enemy.type === 'SCOUT' ? 2 : enemy.type === 'SOLDIER' ? 1 : 0;
           if (enemy.trail.length > maxTrail) enemy.trail.pop();
+        }
+
+        if (pathLength > 0 && enemy.pathIndex >= pathLength - 0.05 && Math.hypot(enemy.col - BASE_POS.col, enemy.row - BASE_POS.row) < 0.2) {
+          const damage = Math.ceil(enemy.maxHP * 0.1);
+          baseHP -= damage;
+          screenShake.duration = 0.2;
+          playBaseDamageSound();
+          enemies.splice(i, 1);
+          if (baseHP <= 0) {
+            baseHP = 0;
+            gameState = GameStates.GAME_OVER;
+            // Save records before showing overlay
+            const finalScore = currency + (currentWave - 1) * 100;
+            const wavesDone = currentWave - 1;
+            if (wavesDone > bestWave) {
+              bestWave = wavesDone;
+              localStorage.setItem('vibe-bestWave', bestWave.toString());
+            }
+            if (finalScore > bestScore) {
+              bestScore = finalScore;
+              localStorage.setItem('vibe-bestScore', bestScore.toString());
+            }
+            showOverlay('GAME_OVER');
+          }
+          continue;
         }
 
         // Boss rotation independent of movement
@@ -978,6 +1357,16 @@
           continue;
         }
 
+        if (proj.phase === 'merge') {
+          proj.mergeTimer -= dt;
+          if (proj.mergeTimer <= 0) {
+            proj.phase = 'travel';
+            proj.col = proj.mergePoint.col;
+            proj.row = proj.mergePoint.row;
+          }
+          continue;
+        }
+
         proj.trail.unshift({ col: proj.col, row: proj.row });
         if (proj.trail.length > 3) proj.trail.pop();
 
@@ -993,7 +1382,32 @@
           target.hp -= damageDealt;
 
           if (proj.slow > 0 && !armorPierced) {
-            target.slowTimer = 1;
+            applySlow(target, proj.slowDuration || 1, proj.slow);
+          }
+
+          if (proj.towerType === 'CANNON' || proj.towerType === 'SNIPER') {
+            target.stunTimer = 0.15;
+            target.pathIndex = Math.max(0, target.pathIndex - 0.2);
+            target.hitFlashFrames = 3;
+            // Spawn debris particles
+            const particleCount = 5 + Math.floor(Math.random() * 4);
+            const cx = (target.col + 0.5) * cellSize;
+            const cy = (target.row + 0.5) * cellSize;
+            const hitAngle = Math.atan2(dy, dx) + Math.PI;
+            for (let j = 0; j < particleCount; j++) {
+              const spread = (Math.random() - 0.5) * Math.PI * 0.8;
+              const speed = 220 + Math.random() * 180;
+              deathParticles.push({
+                x: cx, y: cy,
+                vx: Math.cos(hitAngle + spread) * speed,
+                vy: Math.sin(hitAngle + spread) * speed,
+                color: '#ffffff',
+                size: 2 + Math.random() * 1.5,
+                shape: 'square',
+                life: 1.0,
+                maxLife: 0.12 + Math.random() * 0.08
+              });
+            }
           }
 
           // Splash damage for cannon
@@ -1007,6 +1421,9 @@
                 const splashArmor = armorPierced ? 0 : (enemy.armor || 0);
                 const splashDmg = Math.max(1, proj.splashDamage - splashArmor);
                 enemy.hp -= splashDmg;
+                if (proj.slow > 0) {
+                  applySlow(enemy, proj.slowDuration || 1, proj.slow);
+                }
                 // Splash hit number
                 const sx = (enemy.col + 0.5) * cellSize;
                 const sy = (enemy.row + 0.5) * cellSize;
@@ -1014,7 +1431,7 @@
                   x: sx + (Math.random() - 0.5) * 8,
                   y: sy - 5,
                   text: '-' + splashDmg,
-                  color: '#ff8800',
+                  color: proj.splashColor || '#ff8800',
                   life: 0.5,
                   vy: -30,
                   scale: 0.9
@@ -1027,7 +1444,8 @@
               col: target.col,
               row: target.row,
               radius: proj.splashRadius,
-              life: 0.25
+              life: 0.25,
+              color: proj.splashColor || '#ff8800'
             });
           }
 
@@ -1040,7 +1458,7 @@
             x: hx + (Math.random() - 0.5) * 10,
             y: hy - 5,
             text: '-' + Math.round(damageDealt),
-            color: isBoost ? '#ffd700' : (isPierce ? '#ff4444' : '#ffffff'),
+            color: isBoost ? '#ffd700' : (proj.towerType === 'ICE_BOMB' ? '#a8ecff' : (isPierce ? '#ff4444' : '#ffffff')),
             life: 0.6,
             vy: -40,
             scale: isBoost ? 1.3 : 1.0
@@ -1093,9 +1511,13 @@
         ctx.fillStyle = p.color;
         ctx.shadowColor = p.color;
         ctx.shadowBlur = 4;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
-        ctx.fill();
+        if (p.shape === 'square') {
+          ctx.fillRect(p.x - size / 2, p.y - size / 2, size, size);
+        } else {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
       ctx.globalAlpha = 1;
       ctx.shadowBlur = 0;
@@ -1110,9 +1532,9 @@
         ctx.globalAlpha = alpha * 0.8;
         ctx.beginPath();
         ctx.arc(cx, cy, r, 0, Math.PI * 2);
-        ctx.strokeStyle = '#ff8800';
+        ctx.strokeStyle = ring.color || '#ff8800';
         ctx.lineWidth = 3;
-        ctx.shadowColor = '#ff8800';
+        ctx.shadowColor = ring.color || '#ff8800';
         ctx.shadowBlur = 10;
         ctx.stroke();
         ctx.shadowBlur = 0;
@@ -1392,7 +1814,7 @@
         if (pointerDown && pointerStart && pointerStart.col === cell.col && pointerStart.row === cell.row) {
           if (isPathTile(cell.col, cell.row)) {
             removePathTile(cell.col, cell.row);
-          } else if (getCellAt(cell.col, cell.row) === CELL_TYPES.TOWER) {
+          } else if (getCellTypeAt(cell.col, cell.row) === CELL_TYPES.TOWER) {
             const tower = getTowerAt(cell.col, cell.row);
             if (tower) {
               const modes = ['nearest', 'first', 'last', 'weakest', 'strongest'];
@@ -1453,9 +1875,9 @@
 
         if (isPathTile(cell.col, cell.row)) {
           removePathTile(cell.col, cell.row, inWave);
-        } else if (getCellAt(cell.col, cell.row) === CELL_TYPES.EMPTY) {
+        } else if (getCellTypeAt(cell.col, cell.row) === CELL_TYPES.EMPTY) {
           placePathTile(cell.col, cell.row, inWave);
-        } else if (getCellAt(cell.col, cell.row) === CELL_TYPES.TOWER) {
+        } else if (getCellTypeAt(cell.col, cell.row) === CELL_TYPES.TOWER) {
           const tower = getTowerAt(cell.col, cell.row);
           // Toggle: tap same tower again to deselect
           if (selectedTower === tower) {
@@ -1487,7 +1909,7 @@
     }
 
     function isCellEmpty(col, row) {
-      return getCellAt(col, row) === CELL_TYPES.EMPTY;
+      return getCellTypeAt(col, row) === CELL_TYPES.EMPTY;
     }
 
 
@@ -1950,6 +2372,7 @@
       enemies = [];
       projectiles = [];
       splashRings = [];
+      towerSynergies = [];
       waveEnemyQueue = [];
       powerFreezeAvail = true;
       powerNukeAvail = true;
@@ -2003,6 +2426,7 @@
       drawGrid();
       drawPath();
       drawPathFlow();
+      drawSynergyTethers();
       drawTowers();
       drawEnemies();
       drawProjectiles();
@@ -2097,6 +2521,45 @@
     }
 
     function drawGrid() {
+      for (let row = 0; row < ROWS; row++) {
+        for (let col = 0; col < COLS; col++) {
+          const terrain = getTerrainAt(col, row);
+          const x = col * cellSize;
+          const y = row * cellSize;
+
+          if (terrain === TERRAIN_TYPES.MUD) {
+            ctx.fillStyle = '#3d2618';
+            ctx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+            ctx.fillStyle = 'rgba(94,62,40,0.45)';
+            ctx.beginPath();
+            ctx.ellipse(x + cellSize * 0.4, y + cellSize * 0.58, cellSize * 0.2, cellSize * 0.12, -0.2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(x + cellSize * 0.72, y + cellSize * 0.38, cellSize * 0.14, cellSize * 0.08, 0.4, 0, Math.PI * 2);
+            ctx.fill();
+          } else if (terrain === TERRAIN_TYPES.ICE) {
+            ctx.fillStyle = '#8ecff5';
+            ctx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+            ctx.strokeStyle = 'rgba(235,248,255,0.55)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(x + cellSize * 0.18, y + cellSize * 0.8);
+            ctx.lineTo(x + cellSize * 0.8, y + cellSize * 0.2);
+            ctx.moveTo(x + cellSize * 0.3, y + cellSize * 0.22);
+            ctx.lineTo(x + cellSize * 0.76, y + cellSize * 0.48);
+            ctx.stroke();
+          } else if (terrain === TERRAIN_TYPES.HIGH_GROUND) {
+            ctx.fillStyle = '#665946';
+            ctx.fillRect(x + 2, y + 4, cellSize - 4, cellSize - 6);
+            ctx.fillStyle = '#8b7d66';
+            ctx.fillRect(x + 3, y + 2, cellSize - 6, cellSize - 8);
+            ctx.strokeStyle = 'rgba(255,234,196,0.35)';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(x + 4, y + 3, cellSize - 8, cellSize - 10);
+          }
+        }
+      }
+
       ctx.strokeStyle = '#1a1a2e';
       ctx.lineWidth = 1;
       for (let row = 0; row <= ROWS; row++) {
@@ -2114,90 +2577,86 @@
     }
 
     function drawPath() {
-      for (const tile of pathTiles) {
-        let color = '#2d2d44';
-        let borderColor = '#4a4a6a';
+      const pathData = getPathSplineData({ includeBase: validatePath(), allowDirect: false, resolution: 14 });
+      if (pathData.segments.length === 0) return;
 
-        if (pathInvalidFlash > 0 && !validatePath()) {
-          color = '#ff4444';
-          borderColor = '#ff6666';
-        }
-
-        ctx.fillStyle = color;
-        ctx.fillRect(tile.col * cellSize + 1, tile.row * cellSize + 1, cellSize - 2, cellSize - 2);
-        ctx.strokeStyle = borderColor;
-        ctx.lineWidth = 2;
-        ctx.strokeRect(tile.col * cellSize + 2, tile.row * cellSize + 2, cellSize - 4, cellSize - 4);
+      let glowColor = '#4a4a6a';
+      let coreColor = '#a7b3ff';
+      if (pathInvalidFlash > 0 && !validatePath()) {
+        glowColor = '#ff2222';
+        coreColor = '#ff8888';
+      } else if (validatePath() && gameState === GameStates.WAVE_ACTIVE) {
+        glowColor = '#4a4a6a';
+        coreColor = '#4ade80';
       }
+
+      ctx.beginPath();
+      ctx.moveTo((pathData.segments[0].start.x + 0.5) * cellSize, (pathData.segments[0].start.y + 0.5) * cellSize);
+      for (const segment of pathData.segments) {
+        ctx.bezierCurveTo(
+          (segment.cp1.x + 0.5) * cellSize,
+          (segment.cp1.y + 0.5) * cellSize,
+          (segment.cp2.x + 0.5) * cellSize,
+          (segment.cp2.y + 0.5) * cellSize,
+          (segment.end.x + 0.5) * cellSize,
+          (segment.end.y + 0.5) * cellSize
+        );
+      }
+
+      ctx.strokeStyle = glowColor;
+      ctx.lineWidth = cellSize * 0.4;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = '#4a4a6a';
+      ctx.stroke();
+
+      ctx.strokeStyle = coreColor;
+      ctx.lineWidth = cellSize * 0.14;
+      ctx.shadowBlur = 0;
+      ctx.stroke();
+
+      for (const anchor of pathData.anchors) {
+        ctx.beginPath();
+        ctx.arc((anchor.x + 0.5) * cellSize, (anchor.y + 0.5) * cellSize, cellSize * 0.06, 0, Math.PI * 2);
+        ctx.fillStyle = coreColor;
+        ctx.globalAlpha = 0.45;
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
     }
 
     // Static path flow: dashed line + arrows, no animation
     function drawPathFlow() {
       if (gameState !== GameStates.PLANNING) return;
-      if (pathTiles.length === 0 || !validatePath()) return;
-      const ordered = getOrderedPath();
-      if (ordered.length === 0) return;
+      if (!validatePath()) return;
+      const pathData = getPathSplineData({ includeBase: true, allowDirect: false, resolution: 14 });
+      if (pathData.samples.length === 0 || pathData.totalLength <= 0) return;
 
-      // Smooth dot traveling the full path in ~5s
       const now = Date.now();
-      const cycle = 5000; // 5 seconds per loop
-      const t = (now % cycle) / cycle; // 0..1
-      const pathLen = ordered.length;
-      const dotPos = t * pathLen;
-      const fromIdx = Math.floor(dotPos) % pathLen;
-      const frac = dotPos - Math.floor(dotPos);
-      const a = ordered[fromIdx];
-      let b = fromIdx < pathLen - 1 ? ordered[fromIdx + 1] : { col: BASE_POS.col, row: BASE_POS.row };
-      const fx = (a.col + (b.col - a.col) * frac + 0.5) * cellSize;
-      const fy = (a.row + (b.row - a.row) * frac + 0.5) * cellSize;
+      const cycle = 5000;
+      const t = (now % cycle) / cycle;
+      const dot = getPointOnSpline(pathData, pathData.totalLength * t);
       const pulse = Math.sin(t * Math.PI * 2) * 0.3 + 0.7;
+
       ctx.save();
       ctx.beginPath();
-      ctx.arc(fx, fy, cellSize * 0.12 * pulse, 0, Math.PI * 2);
+      ctx.arc((dot.x + 0.5) * cellSize, (dot.y + 0.5) * cellSize, cellSize * 0.12 * pulse, 0, Math.PI * 2);
       ctx.fillStyle = '#4ade80';
       ctx.shadowColor = '#4ade80';
       ctx.shadowBlur = 10;
       ctx.fill();
       ctx.restore();
 
-      // Direction arrows on each tile
-      for (let i = 0; i < ordered.length; i++) {
-        const tile = ordered[i];
-        const cx = (tile.col + 0.5) * cellSize;
-        const cy = (tile.row + 0.5) * cellSize;
-        let dx = 0, dy = 0;
-        if (i < ordered.length - 1) {
-          dx = ordered[i + 1].col - tile.col;
-          dy = ordered[i + 1].row - tile.row;
-        } else {
-          dx = BASE_POS.col - tile.col;
-          dy = BASE_POS.row - tile.row;
-        }
-        const angle = Math.atan2(dy, dx);
-        ctx.save();
-        ctx.translate(cx, cy);
-        ctx.rotate(angle);
-        ctx.fillStyle = 'rgba(74,222,128,0.4)';
-        ctx.beginPath();
-        ctx.moveTo(cellSize * 0.2, 0);
-        ctx.lineTo(-cellSize * 0.1, -cellSize * 0.1);
-        ctx.lineTo(-cellSize * 0.1, cellSize * 0.1);
-        ctx.closePath();
-        ctx.fill();
-        ctx.restore();
-      }
-
-      // Static dashed line through path center
       ctx.save();
       ctx.strokeStyle = 'rgba(74,222,128,0.12)';
       ctx.lineWidth = cellSize * 0.06;
       ctx.setLineDash([cellSize * 0.2, cellSize * 0.2]);
       ctx.beginPath();
-      ctx.moveTo((ordered[0].col + 0.5) * cellSize, (ordered[0].row + 0.5) * cellSize);
-      for (let i = 1; i < ordered.length; i++) {
-        ctx.lineTo((ordered[i].col + 0.5) * cellSize, (ordered[i].row + 0.5) * cellSize);
+      ctx.moveTo((pathData.samples[0].x + 0.5) * cellSize, (pathData.samples[0].y + 0.5) * cellSize);
+      for (let i = 1; i < pathData.samples.length; i++) {
+        ctx.lineTo((pathData.samples[i].x + 0.5) * cellSize, (pathData.samples[i].y + 0.5) * cellSize);
       }
-      ctx.lineTo((BASE_POS.col + 0.5) * cellSize, (BASE_POS.row + 0.5) * cellSize);
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.restore();
@@ -2326,11 +2785,12 @@
         const baseSize = cellSize * 0.7;
         const boosted = powerBoostTimer > 0;
         const frozen = powerFreezeTimer > 0;
+        const effectiveRange = getTowerEffectiveRange(tower);
 
         // Range indicator when tower is selected (tap in PLANNING)
         if (selectedTower === tower) {
           ctx.beginPath();
-          ctx.arc(cx, cy, tower.range * cellSize, 0, Math.PI * 2);
+          ctx.arc(cx, cy, effectiveRange * cellSize, 0, Math.PI * 2);
           ctx.strokeStyle = tower.color + '66';
           ctx.lineWidth = 2;
           ctx.setLineDash([4, 4]);
@@ -2627,13 +3087,13 @@
 
         // Frost slow visual - blue tint overlay with ice shards
         if (enemy.slowTimer > 0) {
-          const frostAlpha = 0.3;
+          const frostAlpha = enemy.slowMult <= ICE_BOMB_SLOW_MULT ? 0.45 : 0.3;
           const frostRadius = radius * 1.3;
 
           // Blue glow circle
           ctx.globalAlpha = frostAlpha;
-          ctx.fillStyle = '#4488ff';
-          ctx.shadowColor = '#4488ff';
+          ctx.fillStyle = enemy.slowMult <= ICE_BOMB_SLOW_MULT ? '#a8ecff' : '#4488ff';
+          ctx.shadowColor = enemy.slowMult <= ICE_BOMB_SLOW_MULT ? '#a8ecff' : '#4488ff';
           ctx.shadowBlur = 12;
           ctx.beginPath();
           ctx.arc(cx, cy, frostRadius, 0, Math.PI * 2);
@@ -2714,6 +3174,15 @@
 
         // Draw the appropriate shape for this enemy type
         drawEnemyShape(enemy.type, radius, enemy.color, false, enemy.bossRotation);
+
+        if (enemy.hitFlashFrames > 0) {
+          ctx.globalCompositeOperation = 'screen';
+          ctx.globalAlpha = 1;
+          ctx.shadowColor = '#ffffff';
+          ctx.shadowBlur = 20;
+          drawEnemyShape(enemy.type, radius * 1.02, '#ffffff', false, enemy.bossRotation);
+          enemy.hitFlashFrames--;
+        }
 
         ctx.shadowBlur = 0;
         ctx.restore();
@@ -3049,8 +3518,90 @@
       return `rgb(${r},${g},${b})`;
     }
 
+    function drawSynergyTethers() {
+      if (gameState !== GameStates.WAVE_ACTIVE || towerSynergies.length === 0) return;
+      const pulse = Math.sin(Date.now() / 220) * 0.2 + 0.55;
+
+      for (const link of towerSynergies) {
+        const cannonPos = getTowerCenter(link.cannon);
+        const frostPos = getTowerCenter(link.frost);
+        const startX = cannonPos.col * cellSize;
+        const startY = cannonPos.row * cellSize;
+        const endX = frostPos.col * cellSize;
+        const endY = frostPos.row * cellSize;
+
+        ctx.globalAlpha = 0.18 * pulse;
+        ctx.strokeStyle = '#d8f6ff';
+        ctx.lineWidth = 6;
+        ctx.shadowColor = '#a8ecff';
+        ctx.shadowBlur = 12;
+        ctx.beginPath();
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+
+        ctx.globalAlpha = 0.45 * pulse;
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.shadowBlur = 0;
+        ctx.beginPath();
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+      }
+
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
+    }
+
     function drawProjectiles() {
       for (const proj of projectiles) {
+        if (proj.phase === 'merge') {
+          const progress = 1 - Math.max(0, proj.mergeTimer) / proj.mergeDuration;
+          const eased = 1 - Math.pow(1 - progress, 2);
+          const orbACol = proj.sourceA.col + (proj.mergePoint.col - proj.sourceA.col) * eased;
+          const orbARow = proj.sourceA.row + (proj.mergePoint.row - proj.sourceA.row) * eased;
+          const orbBCol = proj.sourceB.col + (proj.mergePoint.col - proj.sourceB.col) * eased;
+          const orbBRow = proj.sourceB.row + (proj.mergePoint.row - proj.sourceB.row) * eased;
+          const mergeX = proj.mergePoint.col * cellSize;
+          const mergeY = proj.mergePoint.row * cellSize;
+
+          ctx.globalAlpha = 0.35;
+          ctx.strokeStyle = '#d8f6ff';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(orbACol * cellSize, orbARow * cellSize);
+          ctx.lineTo(mergeX, mergeY);
+          ctx.moveTo(orbBCol * cellSize, orbBRow * cellSize);
+          ctx.lineTo(mergeX, mergeY);
+          ctx.stroke();
+
+          ctx.globalAlpha = 0.9;
+          ctx.fillStyle = proj.sourceA.color;
+          ctx.shadowColor = proj.sourceA.color;
+          ctx.shadowBlur = 10;
+          ctx.beginPath();
+          ctx.arc(orbACol * cellSize, orbARow * cellSize, 4, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = proj.sourceB.color;
+          ctx.shadowColor = proj.sourceB.color;
+          ctx.beginPath();
+          ctx.arc(orbBCol * cellSize, orbBRow * cellSize, 4, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.globalAlpha = 0.25 + eased * 0.5;
+          ctx.fillStyle = '#a8ecff';
+          ctx.shadowColor = '#a8ecff';
+          ctx.shadowBlur = 18;
+          ctx.beginPath();
+          ctx.arc(mergeX, mergeY, 5 + eased * 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+          ctx.shadowBlur = 0;
+          continue;
+        }
+
         const px = proj.col * cellSize;
         const py = proj.row * cellSize;
         for (let i = 0; i < proj.trail.length; i++) {
@@ -3064,10 +3615,18 @@
         ctx.globalAlpha = 1;
         ctx.fillStyle = proj.color;
         ctx.shadowColor = proj.color;
-        ctx.shadowBlur = 8;
+        ctx.shadowBlur = proj.towerType === 'ICE_BOMB' ? 16 : 8;
         ctx.beginPath();
-        ctx.arc(px, py, 5, 0, Math.PI * 2);
+        ctx.arc(px, py, proj.towerType === 'ICE_BOMB' ? 7 : 5, 0, Math.PI * 2);
         ctx.fill();
+        if (proj.towerType === 'ICE_BOMB') {
+          ctx.globalAlpha = 0.45;
+          ctx.beginPath();
+          ctx.arc(px, py, 11, 0, Math.PI * 2);
+          ctx.fillStyle = '#ffffff';
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
         ctx.shadowBlur = 0;
       }
     }
